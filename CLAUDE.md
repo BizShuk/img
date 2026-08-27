@@ -24,6 +24,7 @@ img/
 │   ├── riff.go               # WebP 的 RIFF chunk 拆解與重組
 │   ├── exif.go               # TIFF IFD 讀取、orientation、就地改寫
 │   ├── exifembed.go          # 把 EXIF 區塊寫進三種輸出容器
+│   ├── exifcompact.go        # 區塊過大時重建一份只含必要欄位的
 │   ├── resize.go             # fit / cover / exact 三模式
 │   ├── analyze.go            # Info 與 Inspect
 │   └── convert.go            # 轉換管線、輸入展開、輸出路徑解析
@@ -96,10 +97,12 @@ img/
 `rwcarlsen/goexif` 已封存；而本工具需要的操作只有「照抄整塊 + 改四個欄位」，
 自寫比適配任何一個函式庫都簡單。
 
-`關鍵約束：一律就地改寫，絕不重新序列化。` TIFF 的 IFD 到處是指向區塊內
+`關鍵約束：預設一律就地改寫，絕不重新序列化。` TIFF 的 IFD 到處是指向區塊內
 其他位置的絕對偏移量（ASCII 字串、sub-IFD、RATIONAL 值）。一旦重新序列化，
 所有偏移量都要跟著搬，那是把一份原本能用的 EXIF 弄壞最快的方法。
 改不動的欄位（型別不符、值在區塊外）就放著不管。
+
+`唯一的例外`是區塊塞不進容器時的重建，見下節。
 
 ### 轉檔時 EXIF 必須被「校正」而不只是「複製」
 
@@ -115,6 +118,27 @@ img/
 
 `隱私：` GPS 座標也在 EXIF 裡，且預設會被帶過去。`--strip-exif` 是發佈用的開關，
 README 與 SKILL 都明講了這一點。
+
+### 區塊過大時重建，而不是整段丟掉
+
+`svc/exifcompact.go`。JPEG 的 APP1 段落上限是 65533 位元組，而相機的
+`MakerNote` 動輒數百 KB。`embedExifJPEG` 遇到這種情況回傳
+`ErrExifTooLarge`，`attachExif` 據此改用 `CompactExif` 重建一份較小的再試 ——
+`少幾個冷門欄位遠好過丟掉拍攝時間與相機資訊`。
+
+保留清單（`keepIFD0` / `keepExif`）的取捨標準是「使用者為什麼要留著 EXIF」：
+相機與鏡頭、拍攝時間、曝光參數。GPS 目錄整組保留 —— 欄位都很小，
+而且只留一半的座標沒有意義。
+
+`MakerNote 必丟，不是選擇題。` 它的內部偏移量多半相對於原 TIFF header，
+搬到新位置就失效。這同時也是`重建不能當成預設路徑`的原因：
+一般情況下寧可原封不動地帶著它，也不要重建後留下一段壞掉的私有資料。
+
+`位元組序沿用來源。` 欄位的值是照抄的原始位元組，換了位元組序會被讀成
+完全不同的數字。同理，目錄內的欄位必須依 tag 遞增排列，這是 TIFF 的規格要求。
+
+`Result.ExifReduced` 讓 CLI 印出 `exif kept (reduced)`，並發一則 `slog.Info`
+說明丟了什麼 —— 有損的取捨不能默默發生。
 
 ### 三種輸出容器各自的 EXIF 擺放方式
 
@@ -213,6 +237,9 @@ npm run deploy   # go install .
 即時產生，帶 EXIF 的 JPEG 由 `jpegWithOrientation` 手工組出 APP1 段落，
 含局部畫格與 disposal 的動畫 GIF 由 `svc/animation_test.go` 的
 `partialFrameGIF` 組出。
+
+`buildExifBlock` 是`測試端獨立實作`的 TIFF 組裝器，刻意不共用 production 的
+`buildTIFF`：兩邊若共用同一份版面計算，計算本身有錯時測試也看不出來。
 新增格式時，`TestConvertRoundTripsEveryFormatPair` 會自動涵蓋所有新的組合。
 
 `cmd/` 的測試要注意：旗標綁在套件層變數上，且 cobra 的子命令一律經由

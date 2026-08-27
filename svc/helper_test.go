@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/gif"
+	"sort"
 	"testing"
 
 	"golang.org/x/image/tiff"
@@ -76,73 +77,145 @@ type exifFixture struct {
 	Width, Height uint32
 	Make          string
 	DateTime      string
+	// MakerNote 模擬廠商私有區塊。實機上動輒數百 KB，是把 EXIF 撐爆
+	// 超過 JPEG 段落上限的主因。
+	MakerNote []byte
+	// GPS 為真時加一個帶座標的 GPS 子目錄。
+	GPS bool
+}
+
+// tiffFixture 是測試端獨立實作的 TIFF 組裝器。刻意`不`共用 production 的
+// buildTIFF —— 兩邊若共用同一份版面計算，計算本身有錯時測試也看不出來。
+type tiffFixture struct {
+	tag    uint16
+	typ    uint16
+	count  uint32
+	data   []byte
+	offset int
 }
 
 // buildExifBlock 組出一個小而完整的 TIFF 區塊：IFD0 帶尺寸、orientation
 // 與相機廠牌，並透過 ExifIFD 指標掛上拍攝時間與像素尺寸。
-// 這是驗證 RetargetExif 的最小樣本 —— 它必須改到 sub-IFD 裡的欄位。
 func buildExifBlock(f exifFixture) []byte {
-	const (
-		IFD0_ENTRIES = 5
-		SUB_ENTRIES  = 3
-	)
 	order := binary.LittleEndian
 
-	// IFD0 從偏移 8 開始；entry count(2) + entries(12n) + next offset(4)。
-	extraAt := 8 + 2 + 12*IFD0_ENTRIES + 4
-	makeBytes := append([]byte(f.Make), 0)
-	if len(makeBytes)%2 == 1 {
-		makeBytes = append(makeBytes, 0)
-	}
-	subAt := extraAt + len(makeBytes)
-	subExtraAt := subAt + 2 + 12*SUB_ENTRIES + 4
-	dateBytes := append([]byte(f.DateTime), 0)
-	if len(dateBytes)%2 == 1 {
-		dateBytes = append(dateBytes, 0)
-	}
-
-	entry := func(tag, typ uint16, count uint32, value []byte) []byte {
-		b := make([]byte, 12)
-		order.PutUint16(b[0:2], tag)
-		order.PutUint16(b[2:4], typ)
-		order.PutUint32(b[4:8], count)
-		copy(b[8:12], value)
+	ascii := func(s string) []byte {
+		b := append([]byte(s), 0)
 		return b
 	}
-	u32 := func(v uint32) []byte {
+	long := func(v uint32) []byte {
 		b := make([]byte, 4)
 		order.PutUint32(b, v)
 		return b
 	}
-	u16 := func(v uint16) []byte {
-		b := make([]byte, 4)
-		order.PutUint16(b[0:2], v)
+	short := func(v uint16) []byte {
+		b := make([]byte, 2)
+		order.PutUint16(b, v)
 		return b
 	}
 
-	out := new(bytes.Buffer)
-	out.WriteString("II")
-	binary.Write(out, order, uint16(42))
-	binary.Write(out, order, uint32(8))
+	entry := func(tag, typ uint16, data []byte) tiffFixture {
+		count := uint32(len(data))
+		if typ == 3 {
+			count = uint32(len(data) / 2)
+		} else if typ == 4 {
+			count = uint32(len(data) / 4)
+		} else if typ == 5 {
+			count = uint32(len(data) / 8)
+		}
+		return tiffFixture{tag: tag, typ: typ, count: count, data: data}
+	}
 
-	binary.Write(out, order, uint16(IFD0_ENTRIES))
-	out.Write(entry(TAG_IMAGE_WIDTH, 4, 1, u32(f.Width)))
-	out.Write(entry(TAG_IMAGE_LENGTH, 4, 1, u32(f.Height)))
-	out.Write(entry(0x010F, 2, uint32(len(makeBytes)), u32(uint32(extraAt)))) // Make
-	out.Write(entry(TAG_ORIENTATION, 3, 1, u16(f.Orientation)))
-	out.Write(entry(TAG_EXIF_IFD, 4, 1, u32(uint32(subAt))))
-	binary.Write(out, order, uint32(0)) // 無 IFD1
+	ifd0 := []tiffFixture{
+		entry(TAG_IMAGE_WIDTH, 4, long(f.Width)),
+		entry(TAG_IMAGE_LENGTH, 4, long(f.Height)),
+		entry(0x010F, 2, ascii(f.Make)),
+		entry(TAG_ORIENTATION, 3, short(f.Orientation)),
+	}
+	exif := []tiffFixture{
+		entry(0x9003, 2, ascii(f.DateTime)),
+		entry(TAG_PIXEL_X_DIM, 4, long(f.Width)),
+		entry(TAG_PIXEL_Y_DIM, 4, long(f.Height)),
+	}
+	if len(f.MakerNote) > 0 {
+		exif = append(exif, entry(0x927C, 7, f.MakerNote))
+	}
+	var gps []tiffFixture
+	if f.GPS {
+		gps = []tiffFixture{
+			entry(0x0001, 2, ascii("N")),
+			entry(0x0002, 5, make([]byte, 24)), // 三組 RATIONAL
+		}
+	}
 
-	out.Write(makeBytes)
+	ifdSize := func(n int) int { return 2 + 12*n + 4 }
+	count0 := len(ifd0) + 1 // ExifIFD 指標
+	if f.GPS {
+		count0++
+	}
 
-	binary.Write(out, order, uint16(SUB_ENTRIES))
-	out.Write(entry(0x9003, 2, uint32(len(dateBytes)), u32(uint32(subExtraAt)))) // DateTimeOriginal
-	out.Write(entry(TAG_PIXEL_X_DIM, 4, 1, u32(f.Width)))
-	out.Write(entry(TAG_PIXEL_Y_DIM, 4, 1, u32(f.Height)))
-	binary.Write(out, order, uint32(0))
+	pos := 8
+	ifd0At := pos
+	pos += ifdSize(count0)
+	exifAt := pos
+	pos += ifdSize(len(exif))
+	gpsAt := pos
+	if f.GPS {
+		pos += ifdSize(len(gps))
+	}
 
-	out.Write(dateBytes)
-	return out.Bytes()
+	place := func(entries []tiffFixture) {
+		for i := range entries {
+			if len(entries[i].data) <= 4 {
+				continue
+			}
+			entries[i].offset = pos
+			pos += len(entries[i].data)
+			if pos%2 == 1 {
+				pos++
+			}
+		}
+	}
+	place(ifd0)
+	place(exif)
+	place(gps)
+
+	out := make([]byte, pos)
+	copy(out[0:2], "II")
+	order.PutUint16(out[2:4], 42)
+	order.PutUint32(out[4:8], 8)
+
+	write := func(at int, entries []tiffFixture) {
+		order.PutUint16(out[at:at+2], uint16(len(entries)))
+		p := at + 2
+		for _, e := range entries {
+			order.PutUint16(out[p:p+2], e.tag)
+			order.PutUint16(out[p+2:p+4], e.typ)
+			order.PutUint32(out[p+4:p+8], e.count)
+			if len(e.data) <= 4 {
+				copy(out[p+8:p+12], e.data)
+			} else {
+				order.PutUint32(out[p+8:p+12], uint32(e.offset))
+				copy(out[e.offset:e.offset+len(e.data)], e.data)
+			}
+			p += 12
+		}
+		order.PutUint32(out[p:p+4], 0)
+	}
+
+	full := append([]tiffFixture{}, ifd0...)
+	full = append(full, tiffFixture{tag: TAG_EXIF_IFD, typ: 4, count: 1, data: long(uint32(exifAt))})
+	if f.GPS {
+		full = append(full, tiffFixture{tag: TAG_GPS_IFD, typ: 4, count: 1, data: long(uint32(gpsAt))})
+	}
+	sort.Slice(full, func(i, j int) bool { return full[i].tag < full[j].tag })
+
+	write(ifd0At, full)
+	write(exifAt, exif)
+	if f.GPS {
+		write(gpsAt, gps)
+	}
+	return out
 }
 
 // jpegWithExif 把一段 EXIF 區塊包成 APP1 塞進 JPEG。
@@ -194,6 +267,19 @@ func fakeHEIC(major string, compatible ...string) []byte {
 	out = append(out, 0, 0, 0, 0)
 	for _, b := range compatible {
 		out = append(out, b...)
+	}
+	return out
+}
+
+// pngWithExif 把一段 EXIF 區塊包成 eXIf chunk 塞進 PNG。PNG 的 chunk 長度
+// 是 32 位元，因此可以裝下遠超過 JPEG 段落上限的區塊。
+func pngWithExif(t *testing.T, img image.Image, block []byte) []byte {
+	t.Helper()
+	base := encodeTo(t, img, FORMAT_PNG, EncodeOptions{})
+
+	out, err := EmbedExif(base, FORMAT_PNG, block, img.Bounds().Dx(), img.Bounds().Dy())
+	if err != nil {
+		t.Fatalf("embed exif into png: %v", err)
 	}
 	return out
 }

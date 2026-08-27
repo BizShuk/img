@@ -164,7 +164,10 @@ func writeResultTable(w io.Writer, results []svc.Result) {
 		if r.SourceFrames > 1 {
 			notes += fmt.Sprintf("  %d/%d frames", r.Frames, r.SourceFrames)
 		}
-		if r.Exif {
+		switch {
+		case r.Exif && r.ExifReduced:
+			notes += "  exif kept (reduced)"
+		case r.Exif:
 			notes += "  exif kept"
 		}
 		fmt.Fprintf(w, "%s -> %s  %s %dx%d  %s -> %s (%s)%s\n",

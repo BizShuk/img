@@ -101,6 +101,10 @@ GIF 的畫格常常只是局部矩形，`img` 會依 disposal 規則先疊成完
 - 自動轉正之後把 `orientation` 歸 `1`，`避免看圖軟體再轉一次`。
 - 縮圖之後同步更新 EXIF 的尺寸欄位，並丟掉指向舊畫面的內嵌縮圖。
 
+JPEG 的中繼資料段落最多只裝得下 64 KB，而相機的 MakerNote 動輒數百 KB。
+區塊塞不下時 `img` 會`只保留必要欄位`（相機、鏡頭、拍攝時間、曝光參數、GPS）
+再寫進去，輸出標示 `exif kept (reduced)` —— 而不是整段丟掉。
+
 ```bash
 img convert photo.jpg -f webp --strip-exif -o web/photo.webp
 ```

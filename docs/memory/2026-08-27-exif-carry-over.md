@@ -48,6 +48,41 @@ RATIONAL 值都是。重新序列化就得把所有偏移量跟著搬，
 因此 `RetargetExif` 只做兩件事：複製一份、就地覆寫既有欄位的值。
 型別不符或值落在區塊外的欄位一律放著不動，不新增、不搬移、不擴充。
 
+## 塞不進 JPEG 時：重建，不是放棄
+
+JPEG 的 APP1 段落上限是 `65533` 位元組。相機的 `MakerNote`（tag `0x927C`）
+動輒 100-300 KB，因此`真實照片的 EXIF 常常塞不進 JPEG`。
+
+原本的處理是整段放棄，等於「因為留不住冷門欄位，所以連拍攝時間也不留」。
+現在改成 `CompactExif`：重建一份只含必要欄位的區塊再試一次。
+
+`MakerNote 必丟，不是選擇題。` 它的內部偏移量多半相對於原 TIFF header，
+搬到新位置就失效 —— 留下來只會是一段壞掉的私有資料。這同時是
+`重建不能當成預設路徑`的原因：容器裝得下時，原封不動地帶著它才是對的。
+
+`位元組序要沿用來源。` 欄位的值是照抄的原始位元組；新區塊若改寫成
+不同的位元組序，那些數字會被讀成完全不同的值。
+
+`目錄內的欄位必須依 tag 遞增排列`，這是 TIFF 的規格要求，漏掉會讓
+部分讀取器解析失敗。
+
+### 驗證：一定要用外部讀取器
+
+自己寫的 TIFF 序列化器不能只用自己寫的解析器驗證。用 Pillow 對答案：
+
+```bash
+python3 -c "
+from PIL import Image
+from PIL.ExifTags import TAGS, GPSTAGS
+im=Image.open('out.jpg'); ex=im.getexif()
+sub=ex.get_ifd(0x8769); gps=ex.get_ifd(0x8825)
+print(ex.get(0x010F), sub.get(0x9003), sub.get(0x829D), len(gps))
+"
+```
+
+重點是`要看到 RATIONAL 型別（如 FNumber）與 GPS 子目錄`都讀得出來 ——
+它們的值都存在資料區，是重新指派偏移量最容易出錯的地方。
+
 ## 為什麼不用 EXIF 函式庫
 
 `dsoprea/go-exif` 體積大且 API 難用，`rwcarlsen/goexif` 已封存。

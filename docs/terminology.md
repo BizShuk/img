@@ -31,7 +31,9 @@
 | `alpha` | 透明通道。PNG 看色彩型別與 `tRNS`，WebP 看 `VP8X` 旗標或 `VP8L` 的 alpha 位元，JPEG 永遠沒有 |
 | `orientation` | EXIF tag `0x0112`，值 1-8。1 為正立，5-8 會交換長寬。`0` 表示檔案未帶此資訊 |
 | `IFD` | TIFF 的 image file directory，一張 tag 到值的表。`IFD0` 是主表，`IFD1` 放內嵌縮圖，`Exif IFD` 由 tag `0x8769` 指向 |
-| `retarget` | 把沿用自來源的 EXIF 校正成與輸出相符：orientation 歸 1、尺寸欄位同步、丟掉 IFD1 |
+| `retarget` | 把沿用自來源的 EXIF 校正成與輸出相符：orientation 歸 1、尺寸欄位同步、丟掉 IFD1。`就地`改寫，不重新序列化 |
+| `compact` | 重建一份只含必要欄位的 EXIF 區塊，丟掉 MakerNote 與內嵌縮圖。只在區塊塞不進容器時使用 |
+| `MakerNote` | EXIF tag `0x927C`，相機廠商的私有區塊，可達數百 KB。內部偏移量相對於原 TIFF header，`搬家即失效`，因此重建時必丟 |
 | `frames` | 動畫張數。靜態圖為 `1`；WebP 數 `ANMF` chunk，GIF 數 image descriptor，APNG 讀 `acTL` |
 | `disposal` | GIF 畫完一格之後畫布要如何處置：`none` 保留、`background` 清空該區域、`previous` 還原成前一格 |
 | `composite` | 把 GIF 的局部畫格依 disposal 規則疊成完整畫面。`img` 的動畫轉檔一律先做這一步 |

@@ -141,6 +141,9 @@ img convert <path>... -f <webp|jpg|png> [flags]
   （orientation 與尺寸欄位會自動校正）。輸出行尾的 `exif kept` 就是在講這件事。
 - `動畫預設整段保留`：輸出行尾的 `6/6 frames` 表示都轉過去了，
   `1/6 frames` 表示只剩第一格 —— 看到後者要主動告知使用者掉幀了。
+- `exif kept (reduced)` 表示原本的 EXIF 塞不進 JPEG 的 64 KB 段落上限，
+  已改成只保留相機、鏡頭、拍攝時間、曝光參數與 GPS。`MakerNote 與內嵌縮圖
+  已丟棄` —— 使用者若在做原始照片歸檔，要提醒他們改用 webp 或 png 為目標。
 
 ## Guardrails
 

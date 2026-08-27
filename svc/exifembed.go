@@ -2,9 +2,14 @@ package svc
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 )
+
+// ErrExifTooLarge 表示 EXIF 區塊塞不進目標容器。呼叫端可以據此改用
+// CompactExif 重建一份較小的再試一次，而不是直接放棄整段中繼資料。
+var ErrExifTooLarge = errors.New("exif block exceeds the container segment limit")
 
 // JPEG_SEGMENT_MAX 是一個 JPEG marker segment 的長度上限。長度欄位本身
 // 佔 2 個位元組且計入其中，因此 payload 最多 65533。
@@ -35,7 +40,7 @@ func EmbedExif(encoded []byte, f Format, block []byte, width, height int) ([]byt
 func embedExifJPEG(encoded, block []byte) ([]byte, error) {
 	payload := append(append([]byte{}, exifPrefix...), block...)
 	if len(payload)+2 > JPEG_SEGMENT_MAX {
-		return encoded, fmt.Errorf("exif block is %d bytes, over the %d byte jpeg segment limit", len(payload), JPEG_SEGMENT_MAX-2)
+		return encoded, fmt.Errorf("%w: %d bytes, jpeg allows %d", ErrExifTooLarge, len(payload), JPEG_SEGMENT_MAX-2)
 	}
 	if len(encoded) < 2 {
 		return encoded, fmt.Errorf("not a jpeg")

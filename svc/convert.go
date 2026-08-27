@@ -2,6 +2,7 @@ package svc
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"image"
 	"log/slog"
@@ -39,6 +40,7 @@ type Result struct {
 	Bytes        int64  `json:"bytes"`
 	SourceBytes  int64  `json:"source_bytes"`
 	Exif         bool   `json:"exif"`
+	ExifReduced  bool   `json:"exif_reduced"`
 	Frames       int    `json:"frames"`
 	SourceFrames int    `json:"source_frames"`
 }
@@ -142,17 +144,20 @@ func ConvertFile(src, dest string, req ConvertRequest) (Result, error) {
 	}
 	encoded := buf.Bytes()
 
-	carriedExif := false
+	carriedExif, reducedExif := false, false
 	if req.PreserveExif && len(meta.Exif) > 0 {
-		block := RetargetExif(meta.Exif, b.Dx(), b.Dy(), rotated)
-		withExif, err := EmbedExif(encoded, req.Target, block, b.Dx(), b.Dy())
+		withExif, reduced, err := attachExif(encoded, req.Target, meta.Exif, b, rotated)
 		if err != nil {
 			// EXIF 帶不過去不該讓整張圖轉換失敗；影像本身是主要產物。
 			slog.Warn("exif not carried over",
 				"source", src, "dest", dest, "target", string(req.Target), "reason", err)
 		} else {
-			encoded = withExif
-			carriedExif = true
+			encoded, carriedExif, reducedExif = withExif, true, reduced
+			if reduced {
+				slog.Info("exif reduced to fit the container",
+					"source", src, "dest", dest, "target", string(req.Target),
+					"dropped", "maker note, embedded thumbnail")
+			}
 		}
 	}
 
@@ -169,9 +174,36 @@ func ConvertFile(src, dest string, req ConvertRequest) (Result, error) {
 		Bytes:        int64(len(encoded)),
 		SourceBytes:  stat.Size(),
 		Exif:         carriedExif,
+		ExifReduced:  reducedExif,
 		Frames:       frames,
 		SourceFrames: meta.Frames,
 	}, nil
+}
+
+// attachExif 把來源 EXIF 校正後寫進輸出。區塊塞不進容器的段落上限時，
+// 退而求其次只保留必要欄位再試一次 —— 少幾個曝光參數遠好過整段丟掉
+// 拍攝時間與相機資訊。
+func attachExif(encoded []byte, target Format, source []byte, bounds image.Rectangle, rotated bool) ([]byte, bool, error) {
+	w, h := bounds.Dx(), bounds.Dy()
+
+	block := RetargetExif(source, w, h, rotated)
+	out, err := EmbedExif(encoded, target, block, w, h)
+	if err == nil {
+		return out, false, nil
+	}
+	if !errors.Is(err, ErrExifTooLarge) {
+		return nil, false, err
+	}
+
+	compact := CompactExif(block)
+	if len(compact) >= len(block) {
+		return nil, false, err
+	}
+	out, retryErr := EmbedExif(encoded, target, compact, w, h)
+	if retryErr != nil {
+		return nil, false, retryErr
+	}
+	return out, true, nil
 }
 
 // animates 判斷這次轉換該不該保留整段動畫。三個條件缺一不可：
