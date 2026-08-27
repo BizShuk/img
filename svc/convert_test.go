@@ -1,6 +1,7 @@
 package svc
 
 import (
+	"image/gif"
 	"os"
 	"path/filepath"
 	"strings"
@@ -381,5 +382,140 @@ func TestConvertStripsExifWhenAsked(t *testing.T) {
 	}
 	if got := parseHeader(FORMAT_JPEG, data).Exif; len(got) != 0 {
 		t.Errorf("output still carries %d bytes of exif", len(got))
+	}
+}
+
+// 動畫來源轉成 webp 要保留整段動畫；轉成裝不下動畫的格式才壓成第一格。
+func TestConvertKeepsAnimationWhenTheTargetCanHoldIt(t *testing.T) {
+	cases := []struct {
+		target     Format
+		firstFrame bool
+		wantFrames int
+	}{
+		{FORMAT_WEBP, false, 3},
+		{FORMAT_WEBP, true, 1},
+		{FORMAT_PNG, false, 1},
+		{FORMAT_JPEG, false, 1},
+	}
+
+	for _, tc := range cases {
+		name := string(tc.target)
+		if tc.firstFrame {
+			name += "_first_frame"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			src := filepath.Join(dir, "anim.gif")
+			if err := os.WriteFile(src, partialFrameGIF(t, gif.DisposalNone), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			req := defaultRequest(tc.target)
+			req.FirstFrame = tc.firstFrame
+			res, err := ConvertFile(src, filepath.Join(dir, "out"+tc.target.Ext()), req)
+			if err != nil {
+				t.Fatalf("ConvertFile: %v", err)
+			}
+
+			if res.Frames != tc.wantFrames {
+				t.Errorf("wrote %d frames, want %d", res.Frames, tc.wantFrames)
+			}
+			if res.SourceFrames != 3 {
+				t.Errorf("source_frames = %d, want 3", res.SourceFrames)
+			}
+			if res.Width != CANVAS_W || res.Height != CANVAS_H {
+				t.Errorf("size = %dx%d, want %dx%d", res.Width, res.Height, CANVAS_W, CANVAS_H)
+			}
+		})
+	}
+}
+
+// 縮圖與轉檔要能同時作用在整段動畫上，且每格尺寸一致。
+func TestConvertResizesEveryFrameOfAnAnimation(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "anim.gif")
+	if err := os.WriteFile(src, partialFrameGIF(t, gif.DisposalNone), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := defaultRequest(FORMAT_WEBP)
+	req.Resize = ResizeSpec{Width: 4, Mode: MODE_FIT}
+	dest := filepath.Join(dir, "out.webp")
+	res, err := ConvertFile(src, dest, req)
+	if err != nil {
+		t.Fatalf("ConvertFile: %v", err)
+	}
+	if res.Frames != 3 {
+		t.Fatalf("wrote %d frames, want 3", res.Frames)
+	}
+
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anim, err := DecodeAnimation(data, FORMAT_WEBP)
+	if err != nil {
+		t.Fatalf("DecodeAnimation: %v", err)
+	}
+	for i, frame := range anim.Frames {
+		if b := frame.Bounds(); b.Dx() != 4 || b.Dy() != 2 {
+			t.Errorf("frame %d is %dx%d, want 4x2", i, b.Dx(), b.Dy())
+		}
+	}
+}
+
+// 動畫轉檔後每一格的內容都必須是`完整畫面`，而不是 GIF 原始的局部矩形。
+func TestConvertCompositesAnimationFrames(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "anim.gif")
+	if err := os.WriteFile(src, partialFrameGIF(t, gif.DisposalNone), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := defaultRequest(FORMAT_WEBP)
+	req.Encode = EncodeOptions{Lossless: true}
+	dest := filepath.Join(dir, "out.webp")
+	if _, err := ConvertFile(src, dest, req); err != nil {
+		t.Fatalf("ConvertFile: %v", err)
+	}
+
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anim, err := DecodeAnimation(data, FORMAT_WEBP)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 第二格只重畫了左上角，其餘畫面必須是第一格留下的藍色。
+	if got := atNRGBA(t, anim.Frames[1], 7, 3); got != BLUE {
+		t.Errorf("frame 1 at (7,3) = %v, want blue carried over from frame 0", got)
+	}
+	if got := atNRGBA(t, anim.Frames[1], 0, 0); got != RED {
+		t.Errorf("frame 1 at (0,0) = %v, want red", got)
+	}
+}
+
+// 動畫 webp 也要能當來源，重新編碼後張數不變。
+func TestConvertReadsAnimatedWebPAsSource(t *testing.T) {
+	dir := t.TempDir()
+	gifSrc := filepath.Join(dir, "anim.gif")
+	if err := os.WriteFile(gifSrc, partialFrameGIF(t, gif.DisposalNone), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	webpSrc := filepath.Join(dir, "anim.webp")
+	if _, err := ConvertFile(gifSrc, webpSrc, defaultRequest(FORMAT_WEBP)); err != nil {
+		t.Fatal(err)
+	}
+
+	req := defaultRequest(FORMAT_WEBP)
+	req.Resize = ResizeSpec{Scale: 0.5, Mode: MODE_FIT}
+	res, err := ConvertFile(webpSrc, filepath.Join(dir, "out.webp"), req)
+	if err != nil {
+		t.Fatalf("ConvertFile: %v", err)
+	}
+	if res.Frames != 3 || res.SourceFrames != 3 {
+		t.Errorf("frames = %d/%d, want 3/3", res.Frames, res.SourceFrames)
 	}
 }

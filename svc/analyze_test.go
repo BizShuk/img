@@ -1,6 +1,7 @@
 package svc
 
 import (
+	"image/gif"
 	"os"
 	"path/filepath"
 	"testing"
@@ -181,12 +182,12 @@ func TestInspectReadsGIFAndTIFF(t *testing.T) {
 
 // 動畫 GIF 報 frames=1 是實質的錯誤陳述：使用者會據此以為轉檔不會掉幀。
 func TestInspectCountsGIFFrames(t *testing.T) {
-	info, err := Inspect(writeTemp(t, "anim.gif", encodeAnimatedGIF(t, 4)))
+	info, err := Inspect(writeTemp(t, "anim.gif", partialFrameGIF(t, gif.DisposalNone)))
 	if err != nil {
 		t.Fatalf("Inspect: %v", err)
 	}
-	if info.Frames != 4 {
-		t.Errorf("frames = %d, want 4", info.Frames)
+	if info.Frames != 3 {
+		t.Errorf("frames = %d, want 3", info.Frames)
 	}
 }
 

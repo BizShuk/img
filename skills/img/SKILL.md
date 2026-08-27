@@ -18,6 +18,9 @@ description: Use when converting images between webp, jpg and png, resizing or b
 | `gif` / `tiff` | ✅ | ❌ 只能當來源 |
 | `heic` / `avif` | ❌ 只認得出格式名 | ❌ |
 
+`動畫`：`gif` 與 `webp` 的動畫整段轉得過去，但`只有 webp 裝得下`。
+目標是 `jpg` / `png` 時只會取第一格。
+
 使用者拿 HEIC 來要求轉檔時，`img` 幫不上忙 —— 直接說明並改建議 macOS 內建的
 `sips -s format jpeg <in> --out <out>`，`不要`假裝可以。
 
@@ -94,6 +97,7 @@ img convert <path>... -f <webp|jpg|png> [flags]
 | `--method` | webp 壓縮強度 0-6，越大越慢越小 |
 | `--no-auto-rotate` | 保留儲存時的像素方向，不套用 EXIF 轉正 |
 | `--strip-exif` | 清掉拍攝時間、相機與 `GPS`；`預設是保留` |
+| `--first-frame` | 把動畫壓成第一格的靜態圖 |
 | `--overwrite` | 允許覆寫；`預設拒絕` |
 | `--json` | 輸出結構化結果 |
 
@@ -121,6 +125,8 @@ img convert <path>... -f <webp|jpg|png> [flags]
 | 檢查一批圖的實際格式 | `img analyze ./pics/*.png --json` |
 | 確認照片是否需要轉正 | `img analyze photo.jpg --json`，看 `orientation` |
 | 發佈到網路前清掉定位資訊 | `img convert photo.jpg -f webp --strip-exif -o web/` |
+| 動畫 GIF 換成體積小很多的動畫 WebP | `img convert loop.gif -f webp` |
+| 從動畫取一張縮圖 | `img convert loop.gif -f webp --first-frame -w 320 -o thumb.webp` |
 
 ## Behaviour to state up front
 
@@ -133,6 +139,8 @@ img convert <path>... -f <webp|jpg|png> [flags]
   來源有 alpha 又需要保留透明時，目標格式必須是 `webp` 或 `png`。
 - `EXIF 預設跟著走`：拍攝時間、相機、鏡頭與 `GPS 座標`都會帶進輸出檔
   （orientation 與尺寸欄位會自動校正）。輸出行尾的 `exif kept` 就是在講這件事。
+- `動畫預設整段保留`：輸出行尾的 `6/6 frames` 表示都轉過去了，
+  `1/6 frames` 表示只剩第一格 —— 看到後者要主動告知使用者掉幀了。
 
 ## Guardrails
 
@@ -145,5 +153,6 @@ img convert <path>... -f <webp|jpg|png> [flags]
   預設加上 `--strip-exif`，並在回報中說明清掉了什麼。反過來，
   使用者在`歸檔`照片時`不要`加 —— 那正是他們要保留的東西。
 - `不要`用 `img` 做內容分析（主色、OCR、物件辨識），它只讀檔頭與像素幾何。
-- 動畫 WebP 目前`只會轉出第一張`；`analyze` 的 `frames > 1` 時要先告知使用者
-  再決定是否轉換。
+- `frames > 1` 的來源要轉成 `jpg` / `png` 時`一定會掉幀`。先告知使用者，
+  並確認他們要的是靜態圖；要保留動畫就必須以 `webp` 為目標。
+- APNG（`png` 且 `frames > 1`）`讀不出畫格`，轉檔一律只剩第一張。

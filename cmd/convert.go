@@ -13,20 +13,21 @@ import (
 )
 
 var (
-	convertFormat    string
-	convertOutput    string
-	convertWidth     int
-	convertHeight    int
-	convertScale     float64
-	convertMode      string
-	convertUpscale   bool
-	convertQuality   int
-	convertMethod    int
-	convertLossless  bool
-	convertNoRotate  bool
-	convertStripExif bool
-	convertOverwrite bool
-	convertJSON      bool
+	convertFormat     string
+	convertOutput     string
+	convertWidth      int
+	convertHeight     int
+	convertScale      float64
+	convertMode       string
+	convertUpscale    bool
+	convertQuality    int
+	convertMethod     int
+	convertLossless   bool
+	convertNoRotate   bool
+	convertStripExif  bool
+	convertFirstFrame bool
+	convertOverwrite  bool
+	convertJSON       bool
 )
 
 // ConvertCmd 在 jpg / png / webp 之間轉換並調整尺寸。
@@ -44,7 +45,10 @@ var ConvertCmd = &cobra.Command{
 --scale 按倍率縮放，不能與 --width/--height 併用。預設不放大。
 
 來源的 EXIF（拍攝時間、相機、鏡頭、GPS）預設會帶進輸出檔，orientation
-與尺寸欄位會同步更新。要發佈到網路上時用 --strip-exif 清掉。`,
+與尺寸欄位會同步更新。要發佈到網路上時用 --strip-exif 清掉。
+
+動畫來源（gif、webp）轉成 webp 時預設保留整段動畫；轉成 jpg / png 則
+只能取第一格。--first-frame 可強制壓成靜態圖。`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(c *cobra.Command, args []string) error {
 		req, err := buildConvertRequest(c)
@@ -84,6 +88,7 @@ func init() {
 	f.BoolVar(&convertLossless, "lossless", false, "encode webp losslessly, ignoring --quality")
 	f.BoolVar(&convertNoRotate, "no-auto-rotate", false, "keep the stored pixel orientation instead of applying EXIF rotation")
 	f.BoolVar(&convertStripExif, "strip-exif", false, "drop capture time, camera and GPS metadata instead of carrying it over")
+	f.BoolVar(&convertFirstFrame, "first-frame", false, "flatten an animated source to its first frame")
 	f.BoolVar(&convertOverwrite, "overwrite", false, "replace existing output files")
 	f.BoolVar(&convertJSON, "json", false, "emit a JSON array instead of a table")
 
@@ -138,6 +143,7 @@ func buildConvertRequest(c *cobra.Command) (svc.ConvertRequest, error) {
 		Encode:       svc.EncodeOptions{Quality: quality, Lossless: convertLossless, Method: method},
 		AutoRotate:   !convertNoRotate,
 		PreserveExif: !convertStripExif,
+		FirstFrame:   convertFirstFrame,
 		Overwrite:    convertOverwrite,
 		Output:       convertOutput,
 	}, nil
@@ -154,13 +160,16 @@ func writeResultJSON(w io.Writer, results []svc.Result) error {
 
 func writeResultTable(w io.Writer, results []svc.Result) {
 	for _, r := range results {
-		exif := ""
+		notes := ""
+		if r.SourceFrames > 1 {
+			notes += fmt.Sprintf("  %d/%d frames", r.Frames, r.SourceFrames)
+		}
 		if r.Exif {
-			exif = "  exif kept"
+			notes += "  exif kept"
 		}
 		fmt.Fprintf(w, "%s -> %s  %s %dx%d  %s -> %s (%s)%s\n",
 			r.Source, r.Dest, r.Format, r.Width, r.Height,
-			humanBytes(r.SourceBytes), humanBytes(r.Bytes), sizeDelta(r.SourceBytes, r.Bytes), exif)
+			humanBytes(r.SourceBytes), humanBytes(r.Bytes), sizeDelta(r.SourceBytes, r.Bytes), notes)
 	}
 }
 

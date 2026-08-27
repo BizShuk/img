@@ -22,29 +22,6 @@ func encodeGIF(t *testing.T, img image.Image) []byte {
 	return buf.Bytes()
 }
 
-func encodeAnimatedGIF(t *testing.T, frames int) []byte {
-	t.Helper()
-	anim := &gif.GIF{}
-	for i := 0; i < frames; i++ {
-		var one bytes.Buffer
-		if err := gif.Encode(&one, makeImage(8, 8, true), nil); err != nil {
-			t.Fatalf("encode gif frame: %v", err)
-		}
-		decoded, err := gif.Decode(&one)
-		if err != nil {
-			t.Fatalf("decode gif frame: %v", err)
-		}
-		anim.Image = append(anim.Image, decoded.(*image.Paletted))
-		anim.Delay = append(anim.Delay, 10)
-	}
-
-	var buf bytes.Buffer
-	if err := gif.EncodeAll(&buf, anim); err != nil {
-		t.Fatalf("encode animated gif: %v", err)
-	}
-	return buf.Bytes()
-}
-
 func encodeTIFF(t *testing.T, img image.Image) []byte {
 	t.Helper()
 	var buf bytes.Buffer

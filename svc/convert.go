@@ -3,6 +3,7 @@ package svc
 import (
 	"bytes"
 	"fmt"
+	"image"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -19,7 +20,10 @@ type ConvertRequest struct {
 	// PreserveExif 把來源的 EXIF 區塊（拍攝時間、相機、鏡頭、GPS）
 	// 帶進輸出檔。關掉即等同於清除中繼資料。
 	PreserveExif bool
-	Overwrite    bool
+	// FirstFrame 強制只轉第一格。動畫來源轉成 webp 時預設保留整段動畫，
+	// 此旗標把它壓成靜態圖。
+	FirstFrame bool
+	Overwrite  bool
 	// Output 是使用者給的 -o。空字串表示輸出到原檔旁邊；
 	// 指向目錄時逐檔輸出，指向檔名時只允許單一輸入。
 	Output string
@@ -27,14 +31,16 @@ type ConvertRequest struct {
 
 // Result 是單一檔案的轉換結果，供 CLI 呈現與測試斷言。
 type Result struct {
-	Source      string `json:"source"`
-	Dest        string `json:"dest"`
-	Format      Format `json:"format"`
-	Width       int    `json:"width"`
-	Height      int    `json:"height"`
-	Bytes       int64  `json:"bytes"`
-	SourceBytes int64  `json:"source_bytes"`
-	Exif        bool   `json:"exif"`
+	Source       string `json:"source"`
+	Dest         string `json:"dest"`
+	Format       Format `json:"format"`
+	Width        int    `json:"width"`
+	Height       int    `json:"height"`
+	Bytes        int64  `json:"bytes"`
+	SourceBytes  int64  `json:"source_bytes"`
+	Exif         bool   `json:"exif"`
+	Frames       int    `json:"frames"`
+	SourceFrames int    `json:"source_frames"`
 }
 
 // isImageExt 判斷副檔名看起來像不像影像。掃描目錄時用它過濾，只是為了
@@ -86,22 +92,53 @@ func ConvertFile(src, dest string, req ConvertRequest) (Result, error) {
 		return Result{}, err
 	}
 
-	img, sourceFormat, err := Decode(data)
+	sourceFormat, err := DetectFormat(data)
 	if err != nil {
 		return Result{}, err
 	}
 	meta := parseHeader(sourceFormat, data)
-
 	rotated := req.AutoRotate && meta.Orientation > 1
-	if req.AutoRotate {
-		img = ApplyOrientation(img, meta.Orientation)
+
+	// 每一格都走同一條轉換路徑，輸出因此保持同尺寸 —— 動畫編碼器要求如此。
+	transform := func(frame image.Image) image.Image {
+		if req.AutoRotate {
+			frame = ApplyOrientation(frame, meta.Orientation)
+		}
+		return Resize(frame, req.Resize)
 	}
-	img = Resize(img, req.Resize)
-	b := img.Bounds()
 
 	var buf bytes.Buffer
-	if err := Encode(&buf, img, req.Target, req.Encode); err != nil {
-		return Result{}, err
+	var b image.Rectangle
+	frames := 1
+
+	if req.animates(sourceFormat, meta) {
+		anim, err := DecodeAnimation(data, sourceFormat)
+		if err != nil {
+			return Result{}, err
+		}
+		anim = anim.Transform(transform)
+		if err := EncodeAnimation(&buf, anim, req.Target, req.Encode); err != nil {
+			return Result{}, err
+		}
+		b = anim.Bounds()
+		frames = len(anim.Frames)
+	} else {
+		img, _, err := Decode(data)
+		if err != nil {
+			return Result{}, err
+		}
+		img = transform(img)
+		if err := Encode(&buf, img, req.Target, req.Encode); err != nil {
+			return Result{}, err
+		}
+		b = img.Bounds()
+
+		// 使用者自己要求壓成單格時不必警告 —— 那是預期中的結果。
+		if meta.Frames > 1 && !req.FirstFrame {
+			slog.Warn("animation flattened to a single frame",
+				"source", src, "dest", dest, "target", string(req.Target),
+				"source_frames", meta.Frames, "reason", flattenReason(req, sourceFormat))
+		}
 	}
 	encoded := buf.Bytes()
 
@@ -124,15 +161,35 @@ func ConvertFile(src, dest string, req ConvertRequest) (Result, error) {
 	}
 
 	return Result{
-		Source:      src,
-		Dest:        dest,
-		Format:      req.Target,
-		Width:       b.Dx(),
-		Height:      b.Dy(),
-		Bytes:       int64(len(encoded)),
-		SourceBytes: stat.Size(),
-		Exif:        carriedExif,
+		Source:       src,
+		Dest:         dest,
+		Format:       req.Target,
+		Width:        b.Dx(),
+		Height:       b.Dy(),
+		Bytes:        int64(len(encoded)),
+		SourceBytes:  stat.Size(),
+		Exif:         carriedExif,
+		Frames:       frames,
+		SourceFrames: meta.Frames,
 	}, nil
+}
+
+// animates 判斷這次轉換該不該保留整段動畫。三個條件缺一不可：
+// 來源真的是多格、來源格式讀得出畫格序列、目標格式裝得下動畫。
+func (r ConvertRequest) animates(source Format, meta headerMeta) bool {
+	return !r.FirstFrame && meta.Frames > 1 && source.Animatable() && r.Target == FORMAT_WEBP
+}
+
+// flattenReason 說明動畫為什麼被壓成單格，讓警告訊息能直接指出原因。
+func flattenReason(r ConvertRequest, source Format) string {
+	switch {
+	case !source.Animatable():
+		return string(source) + " animations cannot be read"
+	case r.Target != FORMAT_WEBP:
+		return string(r.Target) + " cannot hold an animation"
+	default:
+		return "unknown"
+	}
 }
 
 // writeAtomically 先寫同目錄的暫存檔再改名。寫到一半失敗不會留下半個

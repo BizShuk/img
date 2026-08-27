@@ -20,6 +20,7 @@ img/
 │   ├── format.go             # Format 列舉、能力判定、ftyp 品牌嗅探
 │   ├── codec.go              # Decode / Encode 分派、alpha 壓平
 │   ├── meta.go               # 五種容器的檔頭走訪
+│   ├── animation.go          # 畫格序列的讀寫與 GIF disposal 合成
 │   ├── riff.go               # WebP 的 RIFF chunk 拆解與重組
 │   ├── exif.go               # TIFF IFD 讀取、orientation、就地改寫
 │   ├── exifembed.go          # 把 EXIF 區塊寫進三種輸出容器
@@ -58,15 +59,19 @@ img/
 
 ## 關鍵決策 (Key Decisions)
 
-### 格式分成三級，不是「支援」與「不支援」
+### 格式能力用述詞表達，不維護平行清單
 
-`Format` 涵蓋七種格式，能力由兩個述詞決定，`不要`再引入第三張清單：
+`Format` 涵蓋七種格式，能力由三個述詞決定，`不要`再引入第四張清單：
 
-| 級別 | 述詞 | 成員 | 意義 |
-| :--- | :--- | :--- | :--- |
-| 可寫 | `Encodable()` | jpeg, png, webp | `convert -f` 的合法目標 |
-| 可讀 | `Decodable()` | 前三者 + gif, tiff | 可以當轉換來源，`analyze` 給完整報告 |
-| 認得出 | 皆為 false | heic, avif | 只報得出格式名與檔案大小 |
+| 述詞 | 成員 | 意義 |
+| :--- | :--- | :--- |
+| `Encodable()` | jpeg, png, webp | `convert -f` 的合法目標 |
+| `Decodable()` | 前三者 + gif, tiff | 可以當轉換來源，`analyze` 給完整報告 |
+| `Animatable()` | gif, webp | 畫格序列讀得出來 |
+| 皆為 false | heic, avif | 只報得出格式名與檔案大小 |
+
+`Animatable()` 刻意`不含 png`：`analyze` 讀得到 APNG 的 `acTL` 張數，
+但標準庫的解碼器只給第一張。把 png 列進去會讓 convert 以為能保留動畫。
 
 `ParseFormat` 接受全部七種（供副檔名比對用），`ParseTargetFormat` 只接受可寫的。
 兩者混用會讓 `-f heic` 一路走到編碼器才炸掉。
@@ -142,6 +147,35 @@ README 與 SKILL 都明講了這一點。
   `不`把整個檔案當成 EXIF 帶進 convert —— IFD 夾雜著指向影像資料的偏移量，
   整份複製到 JPEG 的 APP1 裡既超長也沒有意義
 
+### GIF 的畫格是局部的，必須先合成
+
+`svc/animation.go`。`gif.DecodeAll` 給的 `*image.Paletted` 常常`只是變動的
+小矩形`，直接拿來當畫格會得到一堆碎片。正確做法是維護一張畫布，逐格
+`draw.Over` 疊上去、拍下快照，再依 `Disposal` 決定如何還原：
+
+| Disposal | 疊完之後 |
+| :--- | :--- |
+| `DisposalNone` (0) | 保留，下一格繼續疊在上面 |
+| `DisposalBackground` | 把`這一格的矩形範圍`清成透明 |
+| `DisposalPrevious` | 整張畫布還原成疊之前的狀態（因此要先備份） |
+
+`延遲單位不同：`GIF 以百分之一秒計，WebP 以毫秒計，換算漏掉就會快十倍。
+GIF 用 `0` 或 `1` 表示「盡快播放」，各家瀏覽器一致改用 100ms，`img` 照做。
+
+`驗證方式：`用 `--lossless` 轉一遍，輸出應與來源`逐格逐點相同`。
+有損模式下合成錯誤會被壓縮誤差掩蓋，看不出來。
+
+### 動畫的轉換路徑與靜態圖分開
+
+`ConvertRequest.animates()` 決定走哪一條，三個條件缺一不可：來源真的多格、
+來源格式 `Animatable()`、目標是 webp。兩條路徑共用同一個 `transform`
+閉包（轉正 + 縮放），因此每格都走同樣的處理，輸出保持同尺寸 ——
+`webp.EncodeAll` 要求所有畫格同尺寸。
+
+走不到動畫路徑時，`Result.Frames` 與 `Result.SourceFrames` 會不相等，
+CLI 印成 `1/12 frames` 並發一則 `slog.Warn` 說明原因。
+`掉幀絕不能靜悄悄地發生`——但使用者自己下 `--first-frame` 時不必警告。
+
 ### 轉 JPEG 前壓白底
 
 `image/jpeg` 對帶 alpha 的影像會直接忽略 alpha 通道，透明區域的
@@ -176,7 +210,9 @@ npm run deploy   # go install .
 ```
 
 測試`不放二進位 fixture`：需要的圖都由 `svc/helper_test.go` 的 `makeImage`
-即時產生，帶 EXIF 的 JPEG 由 `jpegWithOrientation` 手工組出 APP1 段落。
+即時產生，帶 EXIF 的 JPEG 由 `jpegWithOrientation` 手工組出 APP1 段落，
+含局部畫格與 disposal 的動畫 GIF 由 `svc/animation_test.go` 的
+`partialFrameGIF` 組出。
 新增格式時，`TestConvertRoundTripsEveryFormatPair` 會自動涵蓋所有新的組合。
 
 `cmd/` 的測試要注意：旗標綁在套件層變數上，且 cobra 的子命令一律經由

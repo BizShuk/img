@@ -32,14 +32,28 @@ type EncodeOptions struct {
 	Method   int
 }
 
-// Decode 解出影像本體。格式由 magic bytes 判定，與副檔名無關。
-// 認得出格式卻解不開時（heic、avif），錯誤訊息要講出是哪一種格式，
-// 而不是丟一句無從追查的「格式不明」。
+// DetectFormat 只讀檔頭判斷格式，不解碼像素。認得出格式卻解不開時
+// （heic、avif），錯誤訊息要講出是哪一種格式，而不是丟一句無從追查的
+// 「格式不明」。
+func DetectFormat(data []byte) (Format, error) {
+	_, name, err := image.DecodeConfig(bytes.NewReader(data))
+	if err == nil {
+		return Format(name), nil
+	}
+	if f := SniffUndecodable(data); f != "" {
+		return f, fmt.Errorf("%s is recognised but img cannot decode it", f)
+	}
+	return "", fmt.Errorf("decode failed: %w", err)
+}
+
+// Decode 解出影像本體。動畫來源只會拿到第一格 —— 要完整的畫格序列
+// 請改用 DecodeAnimation。
 func Decode(data []byte) (image.Image, Format, error) {
 	img, name, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		if f := SniffUndecodable(data); f != "" {
-			return nil, f, fmt.Errorf("%s is recognised but img cannot decode it", f)
+		f, ferr := DetectFormat(data)
+		if f != "" {
+			return nil, f, ferr
 		}
 		return nil, "", fmt.Errorf("decode failed: %w", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"image"
 	"image/color"
+	"image/gif"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -250,4 +251,68 @@ func TestConvertStripExifFlag(t *testing.T) {
 			t.Errorf("%s gained an orientation tag out of nowhere", filepath.Base(path))
 		}
 	}
+}
+
+// 動畫轉檔的張數要出現在輸出裡，使用者才看得出有沒有掉幀。
+func TestConvertReportsFrameCounts(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "anim.gif")
+	if err := os.WriteFile(src, seedAnimatedGIF(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := run(t, ConvertCmd, src, "-f", "webp", "-o", filepath.Join(dir, "out.webp"))
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if !strings.Contains(out, "3/3 frames") {
+		t.Errorf("output should report the frame count:\n%s", out)
+	}
+
+	flat := filepath.Join(dir, "flat.webp")
+	out, err = run(t, ConvertCmd, src, "-f", "webp", "--first-frame", "-o", flat)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if !strings.Contains(out, "1/3 frames") {
+		t.Errorf("--first-frame should report 1/3:\n%s", out)
+	}
+
+	info, err := svc.Inspect(flat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Frames != 1 {
+		t.Errorf("--first-frame output has %d frames, want 1", info.Frames)
+	}
+}
+
+// seedAnimatedGIF 造一段三格、含局部畫格的 GIF。
+func seedAnimatedGIF(t *testing.T) []byte {
+	t.Helper()
+	palette := color.Palette{
+		color.NRGBA{0, 0, 0, 0},
+		color.NRGBA{0, 0, 255, 255},
+		color.NRGBA{255, 0, 0, 255},
+	}
+	fill := func(r image.Rectangle, idx uint8) *image.Paletted {
+		p := image.NewPaletted(r, palette)
+		for i := range p.Pix {
+			p.Pix[i] = idx
+		}
+		return p
+	}
+
+	g := &gif.GIF{
+		Image:    []*image.Paletted{fill(image.Rect(0, 0, 8, 4), 1), fill(image.Rect(0, 0, 2, 2), 2), fill(image.Rect(4, 0, 6, 2), 2)},
+		Delay:    []int{10, 10, 10},
+		Disposal: []byte{gif.DisposalNone, gif.DisposalNone, gif.DisposalNone},
+		Config:   image.Config{ColorModel: palette, Width: 8, Height: 4},
+	}
+
+	var buf bytes.Buffer
+	if err := gif.EncodeAll(&buf, g); err != nil {
+		t.Fatalf("encode gif: %v", err)
+	}
+	return buf.Bytes()
 }

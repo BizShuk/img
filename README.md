@@ -16,9 +16,9 @@ ImageMagick / `cwebp`（額外的系統相依）。而 AI agent 要判讀一張�
 | 格式 | 讀 | 寫 | 說明 |
 | :--- | :--: | :--: | :--- |
 | `jpg` / `jpeg` | ✅ | ✅ | |
-| `png` | ✅ | ✅ | 含 APNG 的張數判讀 |
-| `webp` | ✅ | ✅ | lossy 與 lossless 皆可 |
-| `gif` | ✅ | — | 含動畫張數與透明色判讀 |
+| `png` | ✅ | ✅ | APNG 只讀得出張數，讀不出畫格 |
+| `webp` | ✅ | ✅ | lossy / lossless / 動畫皆可 |
+| `gif` | ✅ | — | 含動畫；轉成 webp 時整段動畫都會保留 |
 | `tiff` / `tif` | ✅ | — | |
 | `heic` / `heif` | 認得出格式 | — | 沒有夠成熟的純 Go 解碼器 |
 | `avif` | 認得出格式 | — | 同上 |
@@ -74,6 +74,22 @@ img convert photo.heic -f jpg                      # ❌ heic 讀不開，會明
 
 `--scale 0.5` 按倍率縮放，不能與 `--width` / `--height` 併用。
 `預設一律不放大`；來源比目標小時維持原尺寸，要放大得加 `--upscale`。
+
+## 動畫 (Animation)
+
+`gif` 與 `webp` 的動畫`整段`轉得過去 —— 只要目標是 `webp`：
+
+```bash
+img convert loop.gif -f webp                 # 動畫 GIF 轉成動畫 WebP，通常小很多
+img convert loop.gif -f webp -w 480          # 每一格都跟著縮
+img convert loop.gif -f webp --first-frame   # 只要第一格，壓成靜態圖
+```
+
+`jpg` 與 `png` 裝不下動畫，因此會取第一格並在輸出標示 `1/12 frames`
+與一則警告 —— `掉幀不會靜悄悄地發生`。
+
+GIF 的畫格常常只是局部矩形，`img` 會依 disposal 規則先疊成完整畫面再轉，
+延遲時間與循環次數也一併保留。APNG 目前只讀得出張數，讀不出畫格。
 
 ## EXIF 會跟著走 (Metadata Is Carried Over)
 
