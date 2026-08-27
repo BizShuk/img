@@ -1,0 +1,14 @@
+{
+  "name": "img",
+  "version": "0.0.0",
+  "private": true,
+  "description": "圖片格式轉換與檢視 CLI：webp / jpg / png 互轉、尺寸調整、只讀檔頭的影像屬性報告",
+  "scripts": {
+    "dev": "go run .",
+    "test": "go test ./...",
+    "build": "go build -o bin/img .",
+    "deploy": "go install .",
+    "lint": "gofmt -l . && go vet ./...",
+    "clean": "rm -rf bin"
+  }
+}

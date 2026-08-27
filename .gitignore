@@ -1,0 +1,12 @@
+# Binaries
+bin/
+__debug_bin*
+*.out
+*.test
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Instance-local data
+tmp/
