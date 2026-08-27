@@ -20,6 +20,7 @@ var AnalyzeCmd = &cobra.Command{
 位元深度、透明通道、EXIF orientation、動畫張數與檔案大小。
 
 格式以 magic bytes 判定；副檔名與實際內容不符時會標示 mismatch。
+heic 與 avif 讀不開，但仍會回報格式名與檔案大小，並把 decodable 標成 false。
 --json 供腳本與 AI 消費。`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(c *cobra.Command, args []string) error {
@@ -61,6 +62,14 @@ func writeInfoTable(w io.Writer, infos []svc.Info) {
 		}
 		row(w, "file", info.Path)
 		row(w, "format", string(info.Format))
+		if !info.Decodable {
+			row(w, "bytes", humanBytes(info.Bytes))
+			row(w, "note", fmt.Sprintf("recognised by magic bytes; img cannot decode %s, so no dimensions are available", info.Format))
+			if info.Mismatch {
+				row(w, "mismatch", fmt.Sprintf("extension says %s but content is %s", info.ExtFormat, info.Format))
+			}
+			continue
+		}
 		row(w, "size", fmt.Sprintf("%d x %d (%s px)", info.Width, info.Height, humanCount(info.Pixels)))
 		row(w, "ratio", info.Ratio)
 		row(w, "color", fmt.Sprintf("%s / %d-bit / %s", info.ColorModel, info.BitDepth, alphaLabel(info.HasAlpha)))

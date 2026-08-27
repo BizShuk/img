@@ -15,6 +15,7 @@ type Info struct {
 	Path        string `json:"path"`
 	Format      Format `json:"format"`
 	MIME        string `json:"mime"`
+	Decodable   bool   `json:"decodable"`
 	ExtFormat   Format `json:"ext_format,omitempty"`
 	Mismatch    bool   `json:"mismatch"`
 	Width       int    `json:"width"`
@@ -48,7 +49,12 @@ func Inspect(path string) (Info, error) {
 
 	cfg, name, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
-		return Info{}, fmt.Errorf("not a supported image (%w)", err)
+		// 認得出格式卻讀不到尺寸時，仍然回報格式與檔案大小。
+		// 「這是一張 heic」對使用者的價值遠高於「不是支援的影像」。
+		if f := SniffUndecodable(data); f != "" {
+			return undecodableInfo(path, f, stat.Size()), nil
+		}
+		return Info{}, fmt.Errorf("unrecognised image format (%w)", err)
 	}
 
 	format := Format(name)
@@ -58,6 +64,7 @@ func Inspect(path string) (Info, error) {
 		Path:        path,
 		Format:      format,
 		MIME:        format.MIME(),
+		Decodable:   true,
 		ExtFormat:   FormatFromExt(path),
 		Width:       cfg.Width,
 		Height:      cfg.Height,
@@ -73,6 +80,21 @@ func Inspect(path string) (Info, error) {
 	}
 	info.Mismatch = info.ExtFormat != "" && info.ExtFormat != format
 	return info, nil
+}
+
+// undecodableInfo 組出一份「只知道格式」的報告。尺寸相關欄位一律留零值，
+// 由 Decodable 為 false 表明那不是「零像素」而是「沒讀到」。
+func undecodableInfo(path string, f Format, size int64) Info {
+	info := Info{
+		Path:      path,
+		Format:    f,
+		MIME:      f.MIME(),
+		Decodable: false,
+		ExtFormat: FormatFromExt(path),
+		Bytes:     size,
+	}
+	info.Mismatch = info.ExtFormat != "" && info.ExtFormat != f
+	return info
 }
 
 // InspectAll 逐一檢視多個路徑，回傳成功的報告與失敗的錯誤。

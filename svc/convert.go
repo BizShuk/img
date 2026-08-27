@@ -1,7 +1,9 @@
 package svc
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,7 +16,10 @@ type ConvertRequest struct {
 	Resize     ResizeSpec
 	Encode     EncodeOptions
 	AutoRotate bool
-	Overwrite  bool
+	// PreserveExif 把來源的 EXIF 區塊（拍攝時間、相機、鏡頭、GPS）
+	// 帶進輸出檔。關掉即等同於清除中繼資料。
+	PreserveExif bool
+	Overwrite    bool
 	// Output 是使用者給的 -o。空字串表示輸出到原檔旁邊；
 	// 指向目錄時逐檔輸出，指向檔名時只允許單一輸入。
 	Output string
@@ -29,11 +34,15 @@ type Result struct {
 	Height      int    `json:"height"`
 	Bytes       int64  `json:"bytes"`
 	SourceBytes int64  `json:"source_bytes"`
+	Exif        bool   `json:"exif"`
 }
 
-// imageExts 是掃描目錄時採信的副檔名。這裡用副檔名過濾只是為了避免
-// 開啟目錄下每一個無關檔案；被選中的檔案仍以 magic bytes 判定格式。
-var imageExts = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".webp": true}
+// isImageExt 判斷副檔名看起來像不像影像。掃描目錄時用它過濾，只是為了
+// 避免開啟目錄下每一個無關檔案；被選中的檔案仍以 magic bytes 判定格式。
+func isImageExt(ext string) bool {
+	_, ok := formatNames[strings.ToLower(strings.TrimPrefix(ext, "."))]
+	return ok
+}
 
 // Convert 逐一轉換輸入路徑（檔案或目錄）。單一檔案失敗不中斷其餘檔案。
 func Convert(inputs []string, req ConvertRequest) ([]Result, []error) {
@@ -81,50 +90,75 @@ func ConvertFile(src, dest string, req ConvertRequest) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	meta := parseHeader(sourceFormat, data)
 
+	rotated := req.AutoRotate && meta.Orientation > 1
 	if req.AutoRotate {
-		img = ApplyOrientation(img, parseHeader(sourceFormat, data).Orientation)
+		img = ApplyOrientation(img, meta.Orientation)
 	}
 	img = Resize(img, req.Resize)
-
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return Result{}, err
-	}
-
-	// 先寫暫存檔再改名，避免轉換途中失敗留下半個檔案 —— 尤其是
-	// dest 與 src 相同（原地轉換）的情況。
-	tmp, err := os.CreateTemp(filepath.Dir(dest), ".img-*")
-	if err != nil {
-		return Result{}, err
-	}
-	defer os.Remove(tmp.Name())
-
-	if err := Encode(tmp, img, req.Target, req.Encode); err != nil {
-		tmp.Close()
-		return Result{}, err
-	}
-	if err := tmp.Close(); err != nil {
-		return Result{}, err
-	}
-	if err := os.Rename(tmp.Name(), dest); err != nil {
-		return Result{}, err
-	}
-
-	out, err := os.Stat(dest)
-	if err != nil {
-		return Result{}, err
-	}
-
 	b := img.Bounds()
+
+	var buf bytes.Buffer
+	if err := Encode(&buf, img, req.Target, req.Encode); err != nil {
+		return Result{}, err
+	}
+	encoded := buf.Bytes()
+
+	carriedExif := false
+	if req.PreserveExif && len(meta.Exif) > 0 {
+		block := RetargetExif(meta.Exif, b.Dx(), b.Dy(), rotated)
+		withExif, err := EmbedExif(encoded, req.Target, block, b.Dx(), b.Dy())
+		if err != nil {
+			// EXIF 帶不過去不該讓整張圖轉換失敗；影像本身是主要產物。
+			slog.Warn("exif not carried over",
+				"source", src, "dest", dest, "target", string(req.Target), "reason", err)
+		} else {
+			encoded = withExif
+			carriedExif = true
+		}
+	}
+
+	if err := writeAtomically(dest, encoded); err != nil {
+		return Result{}, err
+	}
+
 	return Result{
 		Source:      src,
 		Dest:        dest,
 		Format:      req.Target,
 		Width:       b.Dx(),
 		Height:      b.Dy(),
-		Bytes:       out.Size(),
+		Bytes:       int64(len(encoded)),
 		SourceBytes: stat.Size(),
+		Exif:        carriedExif,
 	}, nil
+}
+
+// writeAtomically 先寫同目錄的暫存檔再改名。寫到一半失敗不會留下半個
+// 檔案 —— 尤其是 dest 與來源相同（原地轉換）的情況。
+func writeAtomically(dest string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(dest), ".img-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), dest)
 }
 
 // ExpandInputs 把使用者給的路徑展開成檔案清單。目錄只掃該層，不遞迴。
@@ -150,7 +184,7 @@ func ExpandInputs(inputs []string) ([]string, []error) {
 		}
 		found := 0
 		for _, e := range entries {
-			if e.IsDir() || !imageExts[strings.ToLower(filepath.Ext(e.Name()))] {
+			if e.IsDir() || !isImageExt(filepath.Ext(e.Name())) {
 				continue
 			}
 			files = append(files, filepath.Join(in, e.Name()))
@@ -199,7 +233,7 @@ func isDirTarget(output string) bool {
 	if stat, err := os.Stat(output); err == nil {
 		return stat.IsDir()
 	}
-	return !imageExts[strings.ToLower(filepath.Ext(output))]
+	return !isImageExt(filepath.Ext(output))
 }
 
 // replaceExt 換掉副檔名，保留其餘檔名。

@@ -24,6 +24,7 @@ var (
 	convertMethod    int
 	convertLossless  bool
 	convertNoRotate  bool
+	convertStripExif bool
 	convertOverwrite bool
 	convertJSON      bool
 )
@@ -40,7 +41,10 @@ var ConvertCmd = &cobra.Command{
 
 尺寸：只給 --width 或 --height 時依原比例算出另一邊；兩邊都給時由
 --mode 決定 fit（縮入框內）、cover（填滿並置中裁切）或 exact（拉伸變形）。
---scale 按倍率縮放，不能與 --width/--height 併用。預設不放大。`,
+--scale 按倍率縮放，不能與 --width/--height 併用。預設不放大。
+
+來源的 EXIF（拍攝時間、相機、鏡頭、GPS）預設會帶進輸出檔，orientation
+與尺寸欄位會同步更新。要發佈到網路上時用 --strip-exif 清掉。`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(c *cobra.Command, args []string) error {
 		req, err := buildConvertRequest(c)
@@ -79,6 +83,7 @@ func init() {
 	f.IntVar(&convertMethod, "method", 0, "webp compression effort 0-6, higher is slower and smaller (default from settings)")
 	f.BoolVar(&convertLossless, "lossless", false, "encode webp losslessly, ignoring --quality")
 	f.BoolVar(&convertNoRotate, "no-auto-rotate", false, "keep the stored pixel orientation instead of applying EXIF rotation")
+	f.BoolVar(&convertStripExif, "strip-exif", false, "drop capture time, camera and GPS metadata instead of carrying it over")
 	f.BoolVar(&convertOverwrite, "overwrite", false, "replace existing output files")
 	f.BoolVar(&convertJSON, "json", false, "emit a JSON array instead of a table")
 
@@ -90,7 +95,7 @@ func init() {
 // buildConvertRequest 把旗標與設定檔合併成一份請求。旗標沒被明確設定時
 // 才回頭取 viper 的值，避免旗標的零值蓋掉使用者設定。
 func buildConvertRequest(c *cobra.Command) (svc.ConvertRequest, error) {
-	target, err := svc.ParseFormat(convertFormat)
+	target, err := svc.ParseTargetFormat(convertFormat)
 	if err != nil {
 		return svc.ConvertRequest{}, err
 	}
@@ -128,12 +133,13 @@ func buildConvertRequest(c *cobra.Command) (svc.ConvertRequest, error) {
 	}
 
 	return svc.ConvertRequest{
-		Target:     target,
-		Resize:     resize,
-		Encode:     svc.EncodeOptions{Quality: quality, Lossless: convertLossless, Method: method},
-		AutoRotate: !convertNoRotate,
-		Overwrite:  convertOverwrite,
-		Output:     convertOutput,
+		Target:       target,
+		Resize:       resize,
+		Encode:       svc.EncodeOptions{Quality: quality, Lossless: convertLossless, Method: method},
+		AutoRotate:   !convertNoRotate,
+		PreserveExif: !convertStripExif,
+		Overwrite:    convertOverwrite,
+		Output:       convertOutput,
 	}, nil
 }
 
@@ -148,9 +154,13 @@ func writeResultJSON(w io.Writer, results []svc.Result) error {
 
 func writeResultTable(w io.Writer, results []svc.Result) {
 	for _, r := range results {
-		fmt.Fprintf(w, "%s -> %s  %s %dx%d  %s -> %s (%s)\n",
+		exif := ""
+		if r.Exif {
+			exif = "  exif kept"
+		}
+		fmt.Fprintf(w, "%s -> %s  %s %dx%d  %s -> %s (%s)%s\n",
 			r.Source, r.Dest, r.Format, r.Width, r.Height,
-			humanBytes(r.SourceBytes), humanBytes(r.Bytes), sizeDelta(r.SourceBytes, r.Bytes))
+			humanBytes(r.SourceBytes), humanBytes(r.Bytes), sizeDelta(r.SourceBytes, r.Bytes), exif)
 	}
 }
 

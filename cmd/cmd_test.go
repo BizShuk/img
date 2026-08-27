@@ -180,3 +180,74 @@ func TestConvertFallsBackToConfiguredQuality(t *testing.T) {
 		t.Errorf("quality 10 produced %d bytes, quality 95 produced %d; the configured default was ignored", low.Size(), high.Size())
 	}
 }
+
+// analyze 對解不開的格式仍要講出格式名，而不是整批失敗。
+func TestAnalyzeNamesUndecodableFormats(t *testing.T) {
+	dir := t.TempDir()
+	heic := filepath.Join(dir, "photo.heic")
+	// 只有 ftyp box 的 ISO BMFF 檔頭：足以辨識，不足以解碼。
+	if err := os.WriteFile(heic, []byte("\x00\x00\x00\x14ftypheic\x00\x00\x00\x00mif1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := run(t, AnalyzeCmd, heic, "--json")
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+
+	var infos []svc.Info
+	if err := json.Unmarshal([]byte(out), &infos); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, out)
+	}
+	if len(infos) != 1 || infos[0].Format != svc.FORMAT_HEIC || infos[0].Decodable {
+		t.Fatalf("unexpected info: %+v", infos)
+	}
+
+	table, err := run(t, AnalyzeCmd, heic)
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if !strings.Contains(table, "format    heic") || !strings.Contains(table, "note") {
+		t.Errorf("table output should name the format and explain the gap:\n%s", table)
+	}
+}
+
+// convert 的 -f 只收能寫出來的格式；讀得進來的 gif / tiff 也不行。
+func TestConvertRejectsNonEncodableTargets(t *testing.T) {
+	dir := t.TempDir()
+	src := seedPNG(t, dir, "a.png", 16, 16)
+
+	for _, target := range []string{"gif", "tiff", "heic"} {
+		t.Run(target, func(t *testing.T) {
+			if _, err := run(t, ConvertCmd, src, "-f", target); err == nil {
+				t.Errorf("-f %s should be rejected", target)
+			}
+		})
+	}
+}
+
+// --strip-exif 是發佈前清掉 GPS 與相機資訊的開關，預設保留。
+func TestConvertStripExifFlag(t *testing.T) {
+	dir := t.TempDir()
+	src := seedPNG(t, dir, "a.png", 32, 32)
+
+	kept := filepath.Join(dir, "kept.jpg")
+	if _, err := run(t, ConvertCmd, src, "-f", "jpg", "-o", kept); err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	stripped := filepath.Join(dir, "stripped.jpg")
+	if _, err := run(t, ConvertCmd, src, "-f", "jpg", "--strip-exif", "-o", stripped); err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+
+	// 來源是沒有 EXIF 的 PNG，兩邊都不該憑空生出中繼資料。
+	for _, path := range []string{kept, stripped} {
+		info, err := svc.Inspect(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Orientation != svc.ORIENTATION_NONE {
+			t.Errorf("%s gained an orientation tag out of nowhere", filepath.Base(path))
+		}
+	}
+}

@@ -3,6 +3,7 @@ package svc
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,17 +20,18 @@ func seed(t *testing.T, dir, name string, f Format, w, h int, opaque bool) strin
 
 func defaultRequest(target Format) ConvertRequest {
 	return ConvertRequest{
-		Target:     target,
-		Resize:     ResizeSpec{Mode: MODE_FIT},
-		Encode:     EncodeOptions{Quality: 80},
-		AutoRotate: true,
+		Target:       target,
+		Resize:       ResizeSpec{Mode: MODE_FIT},
+		Encode:       EncodeOptions{Quality: 80},
+		AutoRotate:   true,
+		PreserveExif: true,
 	}
 }
 
 // 九種格式組合都要能來回轉換，且尺寸不變。
 func TestConvertRoundTripsEveryFormatPair(t *testing.T) {
-	for _, from := range SupportedFormats {
-		for _, to := range SupportedFormats {
+	for _, from := range EncodableFormats {
+		for _, to := range EncodableFormats {
 			t.Run(string(from)+"_to_"+string(to), func(t *testing.T) {
 				dir := t.TempDir()
 				src := seed(t, dir, "src"+from.Ext(), from, 64, 48, true)
@@ -209,4 +211,175 @@ func TestConvertOutputTargetResolution(t *testing.T) {
 			t.Errorf("dest = %q, want %q", results[0].Dest, want)
 		}
 	})
+}
+
+// gif 與 tiff 讀得進來但寫不出去，因此它們只能出現在轉換的來源端。
+func TestConvertAcceptsGIFAndTIFFAsSources(t *testing.T) {
+	cases := []struct {
+		name string
+		data []byte
+	}{
+		{"src.gif", encodeGIF(t, makeImage(64, 48, true))},
+		{"src.tif", encodeTIFF(t, makeImage(64, 48, true))},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			src := filepath.Join(dir, tc.name)
+			if err := os.WriteFile(src, tc.data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			res, err := ConvertFile(src, filepath.Join(dir, "out.webp"), defaultRequest(FORMAT_WEBP))
+			if err != nil {
+				t.Fatalf("ConvertFile: %v", err)
+			}
+			if res.Width != 64 || res.Height != 48 {
+				t.Errorf("size = %dx%d, want 64x48", res.Width, res.Height)
+			}
+		})
+	}
+}
+
+// heic 解不開，但錯誤訊息要講出是哪一種格式，而不是一句無從追查的失敗。
+func TestConvertNamesUndecodableSources(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "photo.heic")
+	if err := os.WriteFile(src, fakeHEIC("heic", "mif1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ConvertFile(src, filepath.Join(dir, "out.png"), defaultRequest(FORMAT_PNG))
+	if err == nil {
+		t.Fatal("converting a heic should fail")
+	}
+	if !strings.Contains(err.Error(), "heic") {
+		t.Errorf("error %q should name the format", err)
+	}
+}
+
+// 拍攝時間與相機資訊要跨格式活下來，這是保存 EXIF 的全部目的。
+func TestConvertCarriesExifAcrossFormats(t *testing.T) {
+	for _, target := range EncodableFormats {
+		t.Run(string(target), func(t *testing.T) {
+			dir := t.TempDir()
+			src := filepath.Join(dir, "src.jpg")
+			block := buildExifBlock(exifFixture{Orientation: 1, Width: 80, Height: 40, Make: "TestCam", DateTime: "2026:08:27 10:30:00"})
+			if err := os.WriteFile(src, jpegWithExif(t, makeImage(80, 40, true), block), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			dest := filepath.Join(dir, "out"+target.Ext())
+			res, err := ConvertFile(src, dest, defaultRequest(target))
+			if err != nil {
+				t.Fatalf("ConvertFile: %v", err)
+			}
+			if !res.Exif {
+				t.Fatal("result should report that exif was carried over")
+			}
+
+			data, err := os.ReadFile(dest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := parseHeader(target, data).Exif
+			if len(got) == 0 {
+				t.Fatal("no exif in the output file")
+			}
+			if asciiTag(t, got, 0, 0x010F) != "TestCam" {
+				t.Error("camera make lost in conversion")
+			}
+			if asciiTag(t, got, TAG_EXIF_IFD, 0x9003) != "2026:08:27 10:30:00" {
+				t.Error("capture time lost in conversion")
+			}
+		})
+	}
+}
+
+// 自動轉正之後輸出的 orientation 必須歸 1，否則看圖軟體會再轉一次。
+func TestConvertResetsOrientationAfterAutoRotating(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "rotated.jpg")
+	if err := os.WriteFile(src, jpegWithOrientation(t, makeImage(80, 40, true), 6), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := filepath.Join(dir, "out.jpg")
+	if _, err := ConvertFile(src, dest, defaultRequest(FORMAT_JPEG)); err != nil {
+		t.Fatalf("ConvertFile: %v", err)
+	}
+
+	info, err := Inspect(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Orientation > 1 {
+		t.Errorf("orientation = %d; the image was already rotated, so viewers would rotate it twice", info.Orientation)
+	}
+	if info.Width != 40 || info.Height != 80 {
+		t.Errorf("size = %dx%d, want 40x80", info.Width, info.Height)
+	}
+}
+
+// 縮圖之後 EXIF 的尺寸欄位要跟著改，否則中繼資料在說謊。
+func TestConvertUpdatesExifDimensionsAfterResizing(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.jpg")
+	block := buildExifBlock(exifFixture{Orientation: 1, Width: 800, Height: 600, Make: "TestCam", DateTime: "2026:08:27 10:30:00"})
+	if err := os.WriteFile(src, jpegWithExif(t, makeImage(800, 600, true), block), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := defaultRequest(FORMAT_JPEG)
+	req.Resize = ResizeSpec{Width: 400, Mode: MODE_FIT}
+	dest := filepath.Join(dir, "out.jpg")
+	if _, err := ConvertFile(src, dest, req); err != nil {
+		t.Fatalf("ConvertFile: %v", err)
+	}
+
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := parseHeader(FORMAT_JPEG, data).Exif
+	ifd0, ok := readTIFF(got)
+	if !ok {
+		t.Fatal("output exif is not valid tiff")
+	}
+	if w, _ := ifd0.uint(got, TAG_IMAGE_WIDTH); w != 400 {
+		t.Errorf("exif ImageWidth = %d, want 400", w)
+	}
+	if h, _ := ifd0.uint(got, TAG_IMAGE_LENGTH); h != 300 {
+		t.Errorf("exif ImageLength = %d, want 300", h)
+	}
+}
+
+// 要發佈到網路上時得能清掉 GPS 與相機資訊。
+func TestConvertStripsExifWhenAsked(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.jpg")
+	if err := os.WriteFile(src, jpegWithOrientation(t, makeImage(40, 20, true), 1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := defaultRequest(FORMAT_JPEG)
+	req.PreserveExif = false
+	dest := filepath.Join(dir, "out.jpg")
+
+	res, err := ConvertFile(src, dest, req)
+	if err != nil {
+		t.Fatalf("ConvertFile: %v", err)
+	}
+	if res.Exif {
+		t.Error("result should not report exif when stripping")
+	}
+
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parseHeader(FORMAT_JPEG, data).Exif; len(got) != 0 {
+		t.Errorf("output still carries %d bytes of exif", len(got))
+	}
 }

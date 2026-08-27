@@ -148,3 +148,88 @@ func TestAspectRatio(t *testing.T) {
 		}
 	}
 }
+
+// gif 與 tiff 讀得進來，因此 analyze 要給出與 jpg / png / webp 同等完整的報告。
+func TestInspectReadsGIFAndTIFF(t *testing.T) {
+	cases := []struct {
+		name   string
+		data   []byte
+		format Format
+	}{
+		{"a.gif", encodeGIF(t, makeImage(64, 48, true)), FORMAT_GIF},
+		{"a.tif", encodeTIFF(t, makeImage(64, 48, true)), FORMAT_TIFF},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.format), func(t *testing.T) {
+			info, err := Inspect(writeTemp(t, tc.name, tc.data))
+			if err != nil {
+				t.Fatalf("Inspect: %v", err)
+			}
+			if !info.Decodable {
+				t.Error("decodable should be true")
+			}
+			if info.Format != tc.format {
+				t.Errorf("format = %q, want %q", info.Format, tc.format)
+			}
+			if info.Width != 64 || info.Height != 48 {
+				t.Errorf("size = %dx%d, want 64x48", info.Width, info.Height)
+			}
+		})
+	}
+}
+
+// 動畫 GIF 報 frames=1 是實質的錯誤陳述：使用者會據此以為轉檔不會掉幀。
+func TestInspectCountsGIFFrames(t *testing.T) {
+	info, err := Inspect(writeTemp(t, "anim.gif", encodeAnimatedGIF(t, 4)))
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if info.Frames != 4 {
+		t.Errorf("frames = %d, want 4", info.Frames)
+	}
+}
+
+// heic / avif 解不開，但至少要講得出是什麼格式，而不是「不是支援的影像」。
+func TestInspectNamesUndecodableFormats(t *testing.T) {
+	cases := []struct {
+		name   string
+		data   []byte
+		format Format
+	}{
+		{"photo.heic", fakeHEIC("heic", "mif1", "heic"), FORMAT_HEIC},
+		{"photo.avif", fakeHEIC("avif", "mif1"), FORMAT_AVIF},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.format), func(t *testing.T) {
+			info, err := Inspect(writeTemp(t, tc.name, tc.data))
+			if err != nil {
+				t.Fatalf("Inspect should succeed for a recognised format: %v", err)
+			}
+			if info.Format != tc.format {
+				t.Errorf("format = %q, want %q", info.Format, tc.format)
+			}
+			if info.Decodable {
+				t.Error("decodable should be false")
+			}
+			if info.Width != 0 || info.Height != 0 {
+				t.Errorf("size = %dx%d, want 0x0 for an undecodable file", info.Width, info.Height)
+			}
+			if info.Bytes != int64(len(tc.data)) {
+				t.Errorf("bytes = %d, want %d", info.Bytes, len(tc.data))
+			}
+		})
+	}
+}
+
+// 副檔名說謊的判斷對解不開的格式一樣要成立。
+func TestInspectFlagsMismatchOnUndecodableFormats(t *testing.T) {
+	info, err := Inspect(writeTemp(t, "photo.jpg", fakeHEIC("heic", "mif1")))
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if !info.Mismatch || info.Format != FORMAT_HEIC {
+		t.Errorf("got format=%q mismatch=%v, want heic/true", info.Format, info.Mismatch)
+	}
+}

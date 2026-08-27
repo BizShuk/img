@@ -14,6 +14,8 @@ var RootCmd = &cobra.Command{
 	Short: "Image conversion and inspection CLI",
 	Long: `img 在 jpg / png / webp 之間轉換影像並調整尺寸，或只讀檔頭回報影像屬性。
 
+gif 與 tiff 只能當轉換來源；heic 與 avif 讀不開，但 analyze 仍認得出格式名。
+
 格式一律以 magic bytes 判定，與副檔名無關。WebP 走純 Go 路徑，
 不需要另外安裝 libwebp 或 ImageMagick。`,
 	SilenceUsage:  true,

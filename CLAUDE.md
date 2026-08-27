@@ -17,10 +17,12 @@ img/
 │   ├── config.go             # gosdk config.Default + slog 等級
 │   └── default_settings.json # 首次執行落在 ~/.config/img/ 的種子
 ├── svc/                      # 影像領域邏輯，不依賴 cobra 或 viper
-│   ├── format.go             # Format 列舉、名稱正規化、副檔名對應
+│   ├── format.go             # Format 列舉、能力判定、ftyp 品牌嗅探
 │   ├── codec.go              # Decode / Encode 分派、alpha 壓平
-│   ├── meta.go               # 三種容器的檔頭走訪
-│   ├── exif.go               # orientation 讀取與套用
+│   ├── meta.go               # 五種容器的檔頭走訪
+│   ├── riff.go               # WebP 的 RIFF chunk 拆解與重組
+│   ├── exif.go               # TIFF IFD 讀取、orientation、就地改寫
+│   ├── exifembed.go          # 把 EXIF 區塊寫進三種輸出容器
 │   ├── resize.go             # fit / cover / exact 三模式
 │   ├── analyze.go            # Info 與 Inspect
 │   └── convert.go            # 轉換管線、輸入展開、輸出路徑解析
@@ -38,6 +40,8 @@ img/
 | `github.com/bizshuk/gosdk` | 設定載入、`config` 子命令 | 家族慣例；`~/.config/img/` 由 `WithAppName` 決定 |
 | `github.com/gen2brain/webp` | WebP 編解碼 | 唯一同時支援 `lossy + lossless encode` 且`免 cgo` 的選項 |
 | `golang.org/x/image/draw` | 縮放重取樣 (CatmullRom) | 官方套件；`disintegration/imaging` 已停止維護 |
+| `golang.org/x/image/tiff` | TIFF 解碼 | 只註冊解碼器；TIFF 不是 convert 的目標格式 |
+| `image/gif` (stdlib) | GIF 解碼 | 同上 |
 | `spf13/cobra` + `spf13/viper` | CLI 與設定 | gosdk 本來就用這組 |
 
 ### WebP 為什麼是 gen2brain
@@ -54,6 +58,23 @@ img/
 
 ## 關鍵決策 (Key Decisions)
 
+### 格式分成三級，不是「支援」與「不支援」
+
+`Format` 涵蓋七種格式，能力由兩個述詞決定，`不要`再引入第三張清單：
+
+| 級別 | 述詞 | 成員 | 意義 |
+| :--- | :--- | :--- | :--- |
+| 可寫 | `Encodable()` | jpeg, png, webp | `convert -f` 的合法目標 |
+| 可讀 | `Decodable()` | 前三者 + gif, tiff | 可以當轉換來源，`analyze` 給完整報告 |
+| 認得出 | 皆為 false | heic, avif | 只報得出格式名與檔案大小 |
+
+`ParseFormat` 接受全部七種（供副檔名比對用），`ParseTargetFormat` 只接受可寫的。
+兩者混用會讓 `-f heic` 一路走到編碼器才炸掉。
+
+`analyze` 對第三級走 `SniffUndecodable`：比對 ISO BMFF 的 `ftyp` box 品牌碼。
+品牌可能只出現在`相容清單`而不是 major brand（`mif1` + `avif` 就是 AVIF），
+因此兩邊都要掃，且 AVIF 要先於 HEIC 判斷。
+
 ### 格式一律由 magic bytes 判定
 
 `image.DecodeConfig` / `image.Decode` 回傳的 registered format name 就是判準。
@@ -63,22 +84,63 @@ img/
 `唯一的例外`是 `svc.ExpandInputs` 掃描目錄時：那裡用副檔名過濾，
 純粹是為了不去開啟目錄下每一個無關檔案。被選中的檔案仍走 magic bytes。
 
-### 自寫最小 EXIF orientation 解析
+### 自寫 TIFF IFD 讀寫，不引入 EXIF 函式庫
 
-`svc/exif.go` 的 `orientationFromTIFF` 只讀 IFD0 的 tag `0x0112`，約 60 行。
-為了一個 tag 引入 `dsoprea/go-exif`（體積大）或 `rwcarlsen/goexif`（已封存）
-不划算。WebP 的 EXIF chunk 與 JPEG 的 APP1 payload 共用同一個 TIFF 解析器。
+`svc/exif.go` 是一個小型的 TIFF IFD 讀寫器：解析 IFD0 與 sub-IFD、
+讀出整數欄位、`就地`改寫既有欄位。`dsoprea/go-exif` 體積大且 API 難用，
+`rwcarlsen/goexif` 已封存；而本工具需要的操作只有「照抄整塊 + 改四個欄位」，
+自寫比適配任何一個函式庫都簡單。
 
-### 三種容器各自的檔頭走訪
+`關鍵約束：一律就地改寫，絕不重新序列化。` TIFF 的 IFD 到處是指向區塊內
+其他位置的絕對偏移量（ASCII 字串、sub-IFD、RATIONAL 值）。一旦重新序列化，
+所有偏移量都要跟著搬，那是把一份原本能用的 EXIF 弄壞最快的方法。
+改不動的欄位（型別不符、值在區塊外）就放著不管。
+
+### 轉檔時 EXIF 必須被「校正」而不只是「複製」
+
+`svc.RetargetExif` 在複製之外做三件事，少做任何一件，帶過去的中繼資料
+都會比沒有更糟：
+
+1. `orientation 歸 1`（僅在確實轉正過時）。否則看圖軟體會依舊值`再轉一次`，
+   使用者看到被轉了兩次的圖。這是整段功能最容易出錯也最難察覺的一點。
+2. `尺寸欄位同步`：IFD0 的 `ImageWidth` / `ImageLength`，以及 Exif sub-IFD 裡的
+   `PixelXDimension` / `PixelYDimension`。sub-IFD 那組很容易被漏掉。
+3. `丟掉 IFD1`：那裡放的是內嵌縮圖，內容是轉換前的舊畫面。
+   把 IFD0 的 next-IFD 指標清零即可，縮圖位元組成為無人引用的死重。
+
+`隱私：` GPS 座標也在 EXIF 裡，且預設會被帶過去。`--strip-exif` 是發佈用的開關，
+README 與 SKILL 都明講了這一點。
+
+### 三種輸出容器各自的 EXIF 擺放方式
+
+`svc/exifembed.go`。EXIF 區塊本身在三種容器裡完全相同（原始 TIFF），
+差別只在外層包裝：
+
+- `JPEG` 插入 `APP1` 段落，位置在 SOI 與既有 APP0 (JFIF) 之後。
+  段落長度欄位只有 16 位元，`超過 65533 就寫不進去`，此時明確報錯，
+  由呼叫端決定放棄 EXIF 而不是產出壞檔。
+- `PNG` 插在`第一個 IDAT 之前`的 `eXIf` chunk。規格允許放在 IDAT 前後，
+  放前面讀取端才不必掃完整份影像資料。CRC 涵蓋 type 與 payload。
+- `WebP` 要`重組整個 RIFF 容器`。簡易的單張 VP8 / VP8L 檔沒有 VP8X，
+  得先補一個延伸檔頭才有地方放 EXIF 旗標，且補的時候不能洗掉透明旗標。
+  已經是延伸格式的則補旗標並在尾端接 chunk。既有的 EXIF chunk 一律換掉。
+
+### 五種容器各自的檔頭走訪
 
 `svc/meta.go` 補的是 `image.Config` 給不出來的東西：位元深度、透明通道、
-動畫張數、orientation。三種容器的結構完全不同，`最容易寫反的是 RIFF`：
+動畫張數、orientation 與原始 EXIF 區塊。各容器的結構完全不同，
+`最容易寫反的是 RIFF`：
 
 - `PNG` 是 `length(4) + type(4) + payload`
 - `RIFF (WebP)` 是 `FourCC(4) + length(4) + payload`，`順序相反`，
   且奇數長度的 chunk 後面要補一個 pad byte
 - `JPEG` 是 marker 串列；`0xD0-0xD9`、`0x01`、`0xFF` 沒有長度欄位，
   `0xC4` / `0xC8` / `0xCC` 落在 SOF 的區間裡但不是 SOF
+- `GIF` 是 block 串列，資料以`長度前綴的 sub-block` 串接，
+  要正確跳過才數得對張數；透明色旗標在 Graphic Control Extension 的 packed byte
+- `TIFF` 檔本身就是一個 TIFF 區塊，因此直接餵給 `readTIFF` 即可。
+  `不`把整個檔案當成 EXIF 帶進 convert —— IFD 夾雜著指向影像資料的偏移量，
+  整份複製到 JPEG 的 APP1 裡既超長也沒有意義
 
 ### 轉 JPEG 前壓白底
 

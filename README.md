@@ -11,6 +11,21 @@ ImageMagick / `cwebp`（額外的系統相依）。而 AI agent 要判讀一張�
 
 `img` 把這兩件事收成兩個子命令，輸出同時照顧人與機器。
 
+## 支援的格式 (Formats)
+
+| 格式 | 讀 | 寫 | 說明 |
+| :--- | :--: | :--: | :--- |
+| `jpg` / `jpeg` | ✅ | ✅ | |
+| `png` | ✅ | ✅ | 含 APNG 的張數判讀 |
+| `webp` | ✅ | ✅ | lossy 與 lossless 皆可 |
+| `gif` | ✅ | — | 含動畫張數與透明色判讀 |
+| `tiff` / `tif` | ✅ | — | |
+| `heic` / `heif` | 認得出格式 | — | 沒有夠成熟的純 Go 解碼器 |
+| `avif` | 認得出格式 | — | 同上 |
+
+`heic` 與 `avif` 讀不開，但 `analyze` 仍會`講出它是什麼格式`，而不是丟一句
+「不是支援的影像」—— 對著一整個 iPhone 相簿時，這個差別很實際。
+
 ## 兩個子命令 (Commands)
 
 ### `img analyze` — 這是什麼圖
@@ -25,6 +40,9 @@ img analyze ./pics/*.png --json
 回報：格式、寬 x 高、總像素數、長寬比、color model、位元深度、透明通道、
 EXIF orientation、動畫張數、檔案大小。
 
+解不開的格式（`heic`、`avif`）只回報格式與檔案大小，並把 `decodable`
+標成 `false` —— 尺寸欄位的 `0` 因此明確表示「沒讀到」而不是「零像素」。
+
 格式一律由 `magic bytes` 判定，`與副檔名無關`。副檔名與實際內容不符時額外標示
 `mismatch` —— 這是「明明叫 `.png` 其實是 webp」這類問題唯一能被發現的地方。
 
@@ -35,7 +53,10 @@ img convert photo.png -f webp                      # 就地轉檔，輸出到原
 img convert ./pics -f webp -w 1200 -o out/         # 整個目錄批次縮圖
 img convert a.png b.png -f jpg -q 90 -o out/       # 多檔輸入
 img convert hero.png -f webp --lossless -o hero.webp
+img convert photo.heic -f jpg                      # ❌ heic 讀不開，會明確報錯
 ```
+
+輸出格式限 `jpg` / `png` / `webp`；`gif` 與 `tiff` 只能當來源。
 
 輸入接受多個檔案路徑，也接受目錄（`只掃該層，不遞迴`）。
 `-o` 指向目錄時逐檔輸出並沿用原檔名；指向檔名時只允許單一輸入；
@@ -53,6 +74,22 @@ img convert hero.png -f webp --lossless -o hero.webp
 
 `--scale 0.5` 按倍率縮放，不能與 `--width` / `--height` 併用。
 `預設一律不放大`；來源比目標小時維持原尺寸，要放大得加 `--upscale`。
+
+## EXIF 會跟著走 (Metadata Is Carried Over)
+
+拍攝時間、相機、鏡頭與 GPS 預設會`原封不動`地帶進輸出檔，三種輸出格式
+（`jpg` 的 APP1、`png` 的 `eXIf` chunk、`webp` 的 `EXIF` chunk）都支援。
+
+同時會做兩件必要的校正，否則帶過去的中繼資料反而會誤導：
+
+- 自動轉正之後把 `orientation` 歸 `1`，`避免看圖軟體再轉一次`。
+- 縮圖之後同步更新 EXIF 的尺寸欄位，並丟掉指向舊畫面的內嵌縮圖。
+
+```bash
+img convert photo.jpg -f webp --strip-exif -o web/photo.webp
+```
+
+`要發佈到網路上時記得 --strip-exif` —— 手機拍的照片幾乎都帶 GPS 座標。
 
 ## 兩個預設的判斷 (Defaults That Matter)
 

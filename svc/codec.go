@@ -11,6 +11,11 @@ import (
 	"io"
 
 	"github.com/gen2brain/webp"
+
+	// 只註冊解碼器：gif 與 tiff 讀得進來，但沒有值得引入的純 Go 編碼器，
+	// 因此不在 EncodableFormats 之列。
+	_ "golang.org/x/image/tiff"
+	_ "image/gif"
 )
 
 // QUALITY_DEFAULT 在呼叫端沒給品質時使用，與 libwebp 的預設一致。
@@ -28,9 +33,14 @@ type EncodeOptions struct {
 }
 
 // Decode 解出影像本體。格式由 magic bytes 判定，與副檔名無關。
+// 認得出格式卻解不開時（heic、avif），錯誤訊息要講出是哪一種格式，
+// 而不是丟一句無從追查的「格式不明」。
 func Decode(data []byte) (image.Image, Format, error) {
 	img, name, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
+		if f := SniffUndecodable(data); f != "" {
+			return nil, f, fmt.Errorf("%s is recognised but img cannot decode it", f)
+		}
 		return nil, "", fmt.Errorf("decode failed: %w", err)
 	}
 	return img, Format(name), nil
