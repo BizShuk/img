@@ -1,30 +1,20 @@
 # TODO
 
 > 本清單建立於 2026-08-27（首版落地），同日隨格式辨識、EXIF 保存與校正、動畫轉檔更新。
-> 條目均有可查證的依據，優先序由上而下。
 
-## 功能 (Features)
+## 影像分析與轉檔 (Features)
 
-- [ ] `analyze` 目前只讀檔頭。若要判讀「圖片內容」（dominant colors、平均亮度），
-      需要另開一個明確會解碼的子命令，`不要`偷偷加進 `analyze` ——
-      它「不解碼像素」的承諾是效能保證的一部分。
-- [ ] APNG 只讀得出張數，讀不出畫格。標準庫的 png 解碼器不支援 `fcTL` /
-      `fdAT`，要補就得自己走 chunk 並逐格 inflate，或引入第三方解碼器。
-      在那之前 APNG 轉檔一律掉幀（有警告）。
+- [ ] [P1] [feature] `analyze` 目前只讀檔頭。若要判讀「圖片內容」（dominant colors、平均亮度），需要另開一個明確會解碼的子命令，`不要`偷偷加進 `analyze` —— 它「不解碼像素」的承諾是效能保證的一部分。
+- [ ] [P1] [feature] APNG 只讀得出張數，讀不出畫格。標準庫的 png 解碼器不支援 `fcTL` / `fdAT`，要補就得自己走 chunk 並逐格 inflate，或引入第三方解碼器。在那之前 APNG 轉檔一律掉幀（有警告）。
 
-## 格式 (Formats)
+## 格式支援 (Formats)
 
-- [ ] `heic` 與 `avif` 目前只認得出格式名，讀不開。兩者在 macOS 上極常見，
-      但純 Go 的解碼器都還不成熟；加入前要先確認不會破壞
-      `零外部二進位相依`這個前提。
-- [ ] `gif` 與 `tiff` 只能當來源，寫不出去。要補寫入端就得決定 GIF 的
-      調色盤量化策略，這是一整組新的品質取捨，不是加一個 encoder 而已。
+- [ ] [P1] [feature] `heic` 與 `avif` 目前只認得出格式名，讀不開。兩者在 macOS 上極常見，但純 Go 的解碼器都還不成熟；加入前要先確認不會破壞 `零外部二進位相依`這個前提。
+- [ ] [P2] [feature] `gif` 與 `tiff` 只能當來源，寫不出去。要補寫入端就得決定 GIF 的調色盤量化策略，這是一整組新的品質取捨，不是加一個 encoder 而已。
 
-## 品質 (Quality)
+## Architecture
 
-- [ ] `--quality` 對 PNG 無效但不會報錯（PNG 一律無損）。
-      目前靜默忽略，應該比照 `--lossless` 明確拒絕。
-- [ ] EXIF 之外的中繼資料（`ICC` 色彩描述檔、`XMP`）仍會在轉換中遺失。
-      ICC 尤其實質：廣色域照片轉檔後顏色會偏。三種容器都有對應的
-      擺放位置（JPEG 的 APP2、PNG 的 `iCCP`、WebP 的 `ICCP` chunk），
-      機制與 `svc/exifembed.go` 相同。
+- [ ] [P1] [chore] `--quality` 對 PNG 無效但不會報錯（PNG 一律無損）。目前靜默忽略，應該比照 `--lossless` 明確拒絕。
+- [ ] [P1] [refactor] EXIF 之外的中繼資料（`ICC` 色彩描述檔、`XMP`）仍會在轉換中遺失。ICC 尤其實質：廣色域照片轉檔後顏色會偏。三種容器都有對應的擺放位置（JPEG 的 APP2、PNG 的 `iCCP`、WebP 的 `ICCP` chunk），機制與 `svc/exifembed.go` 相同。
+
+## Archive
