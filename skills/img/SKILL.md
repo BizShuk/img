@@ -1,6 +1,8 @@
 ---
 name: img
 description: Use when converting images between webp, jpg and png, resizing or batch-shrinking images, stripping or preserving photo metadata, or inspecting an image's real format, dimensions, pixel count, colour model, alpha channel or EXIF orientation with the `img` CLI. Also identifies HEIC and AVIF files by magic bytes. Triggers on "convert this to webp", "shrink these images", "what size is this image", "strip GPS from these photos", "把圖轉成 webp", "批次縮圖", "這張圖多大", "清掉照片的定位資訊", or when an image's extension is suspected to be lying about its real format.
+metadata:
+    source: https://github.com/BizShuk/img
 ---
 
 # img
