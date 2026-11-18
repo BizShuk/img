@@ -8,12 +8,18 @@ import (
 	"os"
 	"strings"
 
+	gosdkcmdconfig "github.com/bizshuk/gosdk/cmd/config"
 	sdkconfig "github.com/bizshuk/gosdk/config"
 	"github.com/spf13/viper"
 )
 
-//go:embed default_settings.json
+//go:embed example/settings.example.json
 var defaultSettingsJSON string
+
+// init 登記內嵌範例, 供 `config default` 複製到設定目錄.
+func init() {
+	gosdkcmdconfig.MustRegisterDefault("settings.json", []byte(defaultSettingsJSON))
+}
 
 // 設定鍵一律用扁平的 SCREAMING_SNAKE 命名，才能被 APP_ 前綴的環境變數覆寫；
 // viper 的巢狀鍵（含「.」）無法對應到合法的 shell 變數名。

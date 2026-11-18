@@ -15,7 +15,7 @@ img/
 │   └── format.go             # humanBytes / humanCount 排版輔助
 ├── config/                   # 設定初始化的單一入口
 │   ├── config.go             # gosdk config.Default + slog 等級
-│   └── default_settings.json # 首次執行落在 ~/.config/img/ 的種子
+│   └── config/example/settings.example.json # 首次執行落在 ~/.config/img/ 的種子
 ├── svc/                      # 影像領域邏輯，不依賴 cobra 或 viper
 │   ├── format.go             # Format 列舉、能力判定、ftyp 品牌嗅探
 │   ├── codec.go              # Decode / Encode 分派、alpha 壓平
