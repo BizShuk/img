@@ -3,7 +3,7 @@ module github.com/bizshuk/img
 go 1.26.0
 
 require (
-	github.com/bizshuk/gosdk v1.3.27
+	github.com/bizshuk/gosdk v1.8.5
 	github.com/gen2brain/webp v0.6.4
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/pflag v1.0.10
@@ -15,6 +15,7 @@ require (
 	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
+	github.com/gocarina/gocsv v0.0.0-20260523204920-c264028e67ea // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
