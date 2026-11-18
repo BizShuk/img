@@ -120,14 +120,14 @@ img convert photo.jpg -f webp --strip-exif -o web/photo.webp
 
 ## 設定 (Configuration)
 
-首次執行會在 `~/.config/img/settings.json` 落下預設值。命令列旗標永遠優先於設定檔。
+首次執行會在 `~/.config/img/settings.json` 落下預設值。命令列旗標永遠優先於設定檔。設定鍵為 snake_case, 同名大寫環境變數 (例如 `QUALITY`) 可覆寫。
 
 | 鍵 | 預設 | 作用 |
 | :--- | :--- | :--- |
-| `QUALITY` | `82` | jpg 與 lossy webp 的品質 |
-| `WEBP_METHOD` | `4` | webp 壓縮耗時／體積取捨，0 最快、6 最小 |
-| `RESIZE_MODE` | `fit` | 未給 `--mode` 時的預設模式 |
-| `LOG_LEVEL` | `warn` | 日誌等級 |
+| `quality` | `82` | jpg 與 lossy webp 的品質 |
+| `webp_method` | `4` | webp 壓縮耗時／體積取捨，0 最快、6 最小 |
+| `resize_mode` | `fit` | 未給 `--mode` 時的預設模式 |
+| `log_level` | `warn` | 日誌等級 |
 
 `img config show` 檢視目前生效的設定。
 

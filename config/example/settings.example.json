@@ -1,6 +1,6 @@
 {
-  "QUALITY": 82,
-  "WEBP_METHOD": 4,
-  "RESIZE_MODE": "fit",
-  "LOG_LEVEL": "warn"
+  "quality": 82,
+  "webp_method": 4,
+  "resize_mode": "fit",
+  "log_level": "warn"
 }

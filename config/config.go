@@ -21,13 +21,14 @@ func init() {
 	gosdkcmdconfig.MustRegisterDefault("settings.json", []byte(defaultSettingsJSON))
 }
 
-// 設定鍵一律用扁平的 SCREAMING_SNAKE 命名，才能被 APP_ 前綴的環境變數覆寫；
+// 設定鍵一律用扁平的 snake_case 命名；viper 查環境變數時會轉大寫，
+// 因此同名 SCREAMING_SNAKE 環境變數（如 QUALITY）仍可覆寫。
 // viper 的巢狀鍵（含「.」）無法對應到合法的 shell 變數名。
 const (
-	KEY_QUALITY     = "QUALITY"
-	KEY_WEBP_METHOD = "WEBP_METHOD"
-	KEY_RESIZE_MODE = "RESIZE_MODE"
-	KEY_LOG_LEVEL   = "LOG_LEVEL"
+	KEY_QUALITY     = "quality"
+	KEY_WEBP_METHOD = "webp_method"
+	KEY_RESIZE_MODE = "resize_mode"
+	KEY_LOG_LEVEL   = "log_level"
 )
 
 // Default 載入設定並套用日誌等級。首次執行時 gosdk 會在

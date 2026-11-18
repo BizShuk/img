@@ -211,10 +211,10 @@ RGB 殘值會變成一片雜色。`svc.FlattenAlpha` 先把影像疊在白底上
 `svc.ConvertFile` 一律寫到同目錄的暫存檔再 `os.Rename`。
 編碼途中失敗不會留下半個檔案，`--overwrite` 原地轉換也不會先毀掉來源。
 
-### 設定鍵用扁平的 SCREAMING_SNAKE
+### 設定鍵用扁平的 snake_case
 
-`QUALITY`、`WEBP_METHOD`、`RESIZE_MODE`、`LOG_LEVEL` 全是扁平鍵，
-才能被 `APP_QUALITY` 這類環境變數覆寫；viper 的巢狀鍵含有 `.`，
+`quality`、`webp_method`、`resize_mode`、`log_level` 全是扁平鍵，
+viper 查環境變數時轉大寫，才能被 `QUALITY` 這類環境變數覆寫；viper 的巢狀鍵含有 `.`，
 對應不到合法的 shell 變數名。
 
 ### 旗標與設定的合併時機
