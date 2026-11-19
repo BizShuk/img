@@ -230,7 +230,7 @@ cobra 的 `init()` 在 `main()` 之前跑，那時 viper 還沒載入，
 npm run lint     # gofmt -l . && go vet ./...
 npm run test     # go test ./...
 npm run build    # bin/img
-npm run deploy   # go install .
+npm run install  # go install .
 ```
 
 測試`不放二進位 fixture`：需要的圖都由 `svc/helper_test.go` 的 `makeImage`
