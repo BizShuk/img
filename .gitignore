@@ -10,3 +10,4 @@ Thumbs.db
 
 # Instance-local data
 tmp/
+node_modules/
