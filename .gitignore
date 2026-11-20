@@ -10,5 +10,4 @@ Thumbs.db
 
 # Instance-local data
 tmp/
-node_modules/
-pnpm-lock.yaml
+**/node_modules/
